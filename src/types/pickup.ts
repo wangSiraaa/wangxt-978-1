@@ -1,7 +1,8 @@
 import { LockType, TransferStatus } from './fee'
+import type { Transfer } from './fee'
 
-export type { Transfer } from './fee'
 export { LockType, TransferStatus }
+export type { Transfer }
 
 export interface PickupLog {
   id: string

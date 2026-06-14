@@ -1,4 +1,5 @@
-import { BatchStatus, ClothingStatus, ClothingQcStatus, MemberLevel, PricePackageType, ClothingStatusTransition } from './fee'
+import { BatchStatus, ClothingStatus, ClothingQcStatus, MemberLevel, PricePackageType } from './fee'
+import type { ClothingStatusTransition } from './fee'
 
 export interface Store {
   id: string
