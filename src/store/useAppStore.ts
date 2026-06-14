@@ -29,8 +29,26 @@ import {
   MAX_PICKUP_ATTEMPTS,
 } from '../types'
 import { generatePickupCode, generateBatchSerial, generateClothBarcode } from '../utils/codeGen'
-import { calcBatchStatus, canRevertBatch, canNotifyBatchPickup, canCompleteBatch } from '../utils/statusCalc'
-import { calcBatchFee, calcPartialPickupFee, type FeeBreakdown } from '../utils/feeCalc'
+import {
+  calcBatchStatus,
+  canRevertBatch,
+  canNotifyBatchPickup,
+  canCompleteBatch,
+  validateClothStatusTransition,
+  createStatusTransition,
+  canCompleteRewash,
+  canMarkRewashFailed,
+  canApplyCompensation,
+  canOutsource,
+  canTransfer,
+} from '../utils/statusCalc'
+import {
+  calcBatchFee,
+  calcPartialPickupFee,
+  type FeeBreakdown,
+  validateFeeChange,
+  validateFeeChangeReason,
+} from '../utils/feeCalc'
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -85,6 +103,35 @@ interface BatchActions {
   splitBatch: (batchId: string, selectedClothingIds: string[]) => Batch
   addClothingToBatch: (batchId: string, clothing: CreateClothingInput) => ClothingItem
   updateClothingStatus: (clothingId: string, status: ClothingStatus, qcStatus?: ClothingQcStatus) => void
+  updateClothingStatusWithHistory: (
+    clothingId: string,
+    status: ClothingStatus,
+    operator: string,
+    remark?: string,
+  ) => void
+  completeRewash: (clothingId: string, operator: string, result?: string) => void
+  markRewashFailed: (clothingId: string, operator: string, reason: string) => void
+  applyCorrection: (
+    batchId: string,
+    amount: number,
+    reason: string,
+    operator: string,
+  ) => FeeChange
+  authorizePickup: (
+    customerId: string,
+    authorizedPhone: string,
+    authorizedName: string,
+    operator: string,
+  ) => void
+  outsourceClothing: (
+    clothingIds: string[],
+    vendor: string,
+    operator: string,
+  ) => void
+  receiveOutsourced: (
+    clothingIds: string[],
+    operator: string,
+  ) => void
   markPickedUp: (batchId: string, clothingIds: string[], operator: string) => { pickedItems: ClothingItem[]; totalFee: number }
   getBatchById: (id: string) => (Batch & { clothingItems: ClothingItem[]; totalFee: number }) | undefined
   getClothingByBatchId: (batchId: string) => ClothingItem[]
@@ -323,9 +370,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: false,
     pickedUpAt: null,
+    transferId: null,
     notified: true,
+    statusHistory: [],
   })
 
   clothingItems.push({
@@ -345,9 +395,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: false,
     pickedUpAt: null,
+    transferId: null,
     notified: true,
+    statusHistory: [],
   })
 
   clothingItems.push({
@@ -367,9 +420,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: false,
     pickedUpAt: null,
+    transferId: null,
     notified: false,
+    statusHistory: [],
   })
 
   qcRecords.push({
@@ -448,9 +504,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: false,
     pickedUpAt: null,
+    transferId: null,
     notified: true,
+    statusHistory: [],
   })
 
   clothingItems.push({
@@ -470,9 +529,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: false,
     pickedUpAt: null,
+    transferId: null,
     notified: true,
+    statusHistory: [],
   })
 
   qcRecords.push({
@@ -549,9 +611,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: true,
     pickedUpAt: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
+    transferId: null,
     notified: true,
+    statusHistory: [],
   })
 
   clothingItems.push({
@@ -571,9 +636,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: false,
     pickedUpAt: null,
+    transferId: null,
     notified: true,
+    statusHistory: [],
   })
 
   feeChanges.push({
@@ -626,9 +694,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: '专业皮具护理中心',
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: false,
     pickedUpAt: null,
+    transferId: null,
     notified: false,
+    statusHistory: [],
   })
 
   clothingItems.push({
@@ -648,9 +719,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: false,
     pickedUpAt: null,
+    transferId: null,
     notified: false,
+    statusHistory: [],
   })
 
   clothingItems.push({
@@ -670,9 +744,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: false,
     pickedUpAt: null,
+    transferId: null,
     notified: false,
+    statusHistory: [],
   })
 
   const batch5No = generateBatchSerial('store_002', new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000))
@@ -715,9 +792,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: true,
     pickedUpAt: new Date(now.getTime() - 9 * 24 * 60 * 60 * 1000),
+    transferId: null,
     notified: true,
+    statusHistory: [],
   })
 
   clothingItems.push({
@@ -737,9 +817,12 @@ function createDemoData(): BatchState {
     outsourcedVendor: null,
     isRewashed: false,
     rewashCount: 0,
+    rewashFailedCount: 0,
     isPickedUp: true,
     pickedUpAt: new Date(now.getTime() - 9 * 24 * 60 * 60 * 1000),
+    transferId: null,
     notified: true,
+    statusHistory: [],
   })
 
   compensations.push({
@@ -910,9 +993,12 @@ export const useAppStore = create<AppStore>()(
           outsourcedVendor: item.outsourcedVendor ?? null,
           isRewashed: false,
           rewashCount: 0,
+          rewashFailedCount: 0,
           isPickedUp: false,
           pickedUpAt: null,
+          transferId: null,
           notified: false,
+          statusHistory: [],
         }))
 
         const totalBaseFee = clothingItems.reduce((sum, c) => sum + c.basePrice, 0)
@@ -971,6 +1057,9 @@ export const useAppStore = create<AppStore>()(
               ...c,
               batchId: newBatchId,
               barcode: generateClothBarcode(newBatchNo, idx + 1),
+              rewashFailedCount: c.rewashFailedCount ?? 0,
+              transferId: c.transferId ?? null,
+              statusHistory: c.statusHistory ?? [],
             }))
           )
 
@@ -1039,9 +1128,12 @@ export const useAppStore = create<AppStore>()(
           outsourcedVendor: clothing.outsourcedVendor ?? null,
           isRewashed: false,
           rewashCount: 0,
+          rewashFailedCount: 0,
           isPickedUp: false,
           pickedUpAt: null,
+          transferId: null,
           notified: false,
+          statusHistory: [],
         }
 
         const batchClothing = [...existingInBatch, newClothing]
@@ -1074,6 +1166,9 @@ export const useAppStore = create<AppStore>()(
                 qcStatus: qcStatus ?? c.qcStatus,
                 isRewashed: status === ClothingStatus.REWASHING ? true : c.isRewashed,
                 rewashCount: status === ClothingStatus.REWASHING ? c.rewashCount + 1 : c.rewashCount,
+                rewashFailedCount: c.rewashFailedCount ?? 0,
+                transferId: c.transferId ?? null,
+                statusHistory: c.statusHistory ?? [],
               }
             }
             return c
@@ -1098,6 +1193,235 @@ export const useAppStore = create<AppStore>()(
               b.id === batchId ? { ...b, status: statusResult.status, isLocked: statusResult.isLocked } : b
             ),
           }
+        })
+      },
+
+      updateClothingStatusWithHistory: (clothingId, targetStatus, operator, remark) => {
+        const state = get()
+        const clothing = state.clothingItems.find((c) => c.id === clothingId)
+        if (!clothing) throw new Error('衣物不存在')
+
+        const batch = state.batches.find((b) => b.id === clothing.batchId)
+        if (!batch) throw new Error('批次不存在')
+
+        const validation = validateClothStatusTransition(clothing, targetStatus, batch)
+        if (!validation.valid) {
+          throw new Error(validation.reason || '状态变更不合法')
+        }
+
+        const transition = createStatusTransition(
+          clothing.status,
+          targetStatus,
+          operator,
+          remark || '',
+        )
+
+        set((state) => {
+          const updatedItems = state.clothingItems.map((c) => {
+            if (c.id === clothingId) {
+              return {
+                ...c,
+                status: targetStatus,
+                isRewashed: targetStatus === ClothingStatus.REWASHING ? true : c.isRewashed,
+                rewashCount: targetStatus === ClothingStatus.REWASHING ? c.rewashCount + 1 : c.rewashCount,
+                rewashFailedCount:
+                  targetStatus === ClothingStatus.REWASH_FAILED
+                    ? (c.rewashFailedCount ?? 0) + 1
+                    : c.rewashFailedCount ?? 0,
+                statusHistory: [...(c.statusHistory ?? []), transition],
+              }
+            }
+            return c
+          })
+
+          const batchId = clothing.batchId
+          const batchClothing = updatedItems.filter((c) => c.batchId === batchId)
+          const lockRecords = state.lockRecords.filter((l) => l.batchId === batchId)
+          const feeChanges = state.feeChanges.filter((f) => f.batchId === batchId)
+          const qcRecords = state.qcRecords.filter((q) => q.batchId === batchId)
+          const statusResult = calcBatchStatus(batch, batchClothing, lockRecords, feeChanges, qcRecords)
+
+          return {
+            clothingItems: updatedItems,
+            batches: state.batches.map((b) =>
+              b.id === batchId ? { ...b, status: statusResult.status, isLocked: statusResult.isLocked } : b
+            ),
+          }
+        })
+      },
+
+      completeRewash: (clothingId, operator, result) => {
+        const state = get()
+        const clothing = state.clothingItems.find((c) => c.id === clothingId)
+        if (!clothing) throw new Error('衣物不存在')
+
+        const batch = state.batches.find((b) => b.id === clothing.batchId)
+        if (!batch) throw new Error('批次不存在')
+
+        if (!canCompleteRewash(clothing, batch)) {
+          throw new Error('当前状态不允许完成返洗')
+        }
+
+        set((state) => {
+          const updatedRewash = state.rewashRecords.map((r) => {
+            if (r.clothingId === clothingId && r.status === RewashStatus.PROCESSING) {
+              return { ...r, status: RewashStatus.COMPLETED, result: result || null }
+            }
+            return r
+          })
+
+          return { rewashRecords: updatedRewash }
+        })
+
+        get().updateClothingStatusWithHistory(
+          clothingId,
+          ClothingStatus.PENDING_QC,
+          operator,
+          result || '返洗完成',
+        )
+      },
+
+      markRewashFailed: (clothingId, operator, reason) => {
+        const state = get()
+        const clothing = state.clothingItems.find((c) => c.id === clothingId)
+        if (!clothing) throw new Error('衣物不存在')
+
+        const batch = state.batches.find((b) => b.id === clothing.batchId)
+        if (!batch) throw new Error('批次不存在')
+
+        if (!canMarkRewashFailed(clothing, batch)) {
+          throw new Error('当前状态不允许标记返洗失败')
+        }
+
+        if (!reason || reason.trim().length === 0) {
+          throw new Error('必须填写返洗失败原因')
+        }
+
+        set((state) => {
+          const updatedRewash = state.rewashRecords.map((r) => {
+            if (r.clothingId === clothingId && r.status === RewashStatus.PROCESSING) {
+              return { ...r, status: RewashStatus.FAILED, result: reason }
+            }
+            return r
+          })
+
+          return { rewashRecords: updatedRewash }
+        })
+
+        get().updateClothingStatusWithHistory(
+          clothingId,
+          ClothingStatus.REWASH_FAILED,
+          operator,
+          reason,
+        )
+      },
+
+      applyCorrection: (batchId, amount, reason, operator) => {
+        const state = get()
+        const batch = state.batches.find((b) => b.id === batchId)
+        if (!batch) throw new Error('批次不存在')
+
+        const changeType = batch.isDayClosed ? FeeChangeType.DAYCLOSE_ADJUST : FeeChangeType.CORRECTION
+
+        const validation = validateFeeChange(batch, changeType, 'manager')
+        if (!validation.valid) {
+          throw new Error(validation.reason || '冲正操作不允许')
+        }
+
+        if (!validateFeeChangeReason(changeType, reason)) {
+          throw new Error('冲正必须填写原因')
+        }
+
+        const now = new Date()
+        const feeChange: FeeChange = {
+          id: uuid(),
+          batchId,
+          changeType,
+          amount,
+          reason,
+          operator,
+          operateTime: now,
+        }
+
+        set((state) => {
+          const currentBatch = state.batches.find((b) => b.id === batchId)
+          if (!currentBatch) return { feeChanges: [...state.feeChanges, feeChange] }
+
+          const newFinalAmount = currentBatch.finalAmount + amount
+
+          return {
+            feeChanges: [...state.feeChanges, feeChange],
+            batches: state.batches.map((b) =>
+              b.id === batchId
+                ? {
+                    ...b,
+                    finalAmount: Math.round(newFinalAmount * 100) / 100,
+                  }
+                : b
+            ),
+          }
+        })
+
+        return feeChange
+      },
+
+      authorizePickup: (customerId, authorizedPhone, authorizedName, operator) => {
+        set((state) => {
+          const updatedCustomers = state.customers.map((c) => {
+            if (c.id === customerId) {
+              return {
+                ...c,
+                isAuthorized: true,
+                authorizedPhone,
+                authorizedName,
+                authorizeOperator: operator,
+                authorizeTime: new Date(),
+              }
+            }
+            return c
+          })
+
+          return { customers: updatedCustomers }
+        })
+      },
+
+      outsourceClothing: (clothingIds, vendor, operator) => {
+        const state = get()
+
+        clothingIds.forEach((clothingId) => {
+          const clothing = state.clothingItems.find((c) => c.id === clothingId)
+          if (!clothing) throw new Error('衣物不存在')
+
+          const batch = state.batches.find((b) => b.id === clothing.batchId)
+          if (!batch) throw new Error('批次不存在')
+
+          if (!canOutsource(clothing, batch)) {
+            throw new Error(`衣物 ${clothing.barcode} 当前状态不允许外包`)
+          }
+
+          get().updateClothingStatusWithHistory(
+            clothingId,
+            ClothingStatus.OUTSOURCED,
+            operator,
+            `外包给: ${vendor}`,
+          )
+
+          set((state) => ({
+            clothingItems: state.clothingItems.map((c) =>
+              c.id === clothingId ? { ...c, outsourcedVendor: vendor } : c
+            ),
+          }))
+        })
+      },
+
+      receiveOutsourced: (clothingIds, operator) => {
+        clothingIds.forEach((clothingId) => {
+          get().updateClothingStatusWithHistory(
+            clothingId,
+            ClothingStatus.PENDING_QC,
+            operator,
+            '外包收回，等待质检',
+          )
         })
       },
 
@@ -1546,15 +1870,30 @@ export const useAppStore = create<AppStore>()(
       },
 
       applyFeeChange: (batchId, changeType, amount, reason, operator) => {
-        if (!reason || reason.trim() === '') {
-          throw new Error('费用变更必须填写原因')
+        const state = get()
+        const batch = state.batches.find((b) => b.id === batchId)
+        if (!batch) throw new Error('批次不存在')
+
+        const operatorRole = changeType === FeeChangeType.REDUCTION || changeType === FeeChangeType.CORRECTION
+          ? 'manager'
+          : 'cashier'
+
+        const validation = validateFeeChange(batch, changeType, operatorRole)
+        if (!validation.valid) {
+          throw new Error(validation.reason || '费用变更不允许')
+        }
+
+        if (!validateFeeChangeReason(changeType, reason)) {
+          throw new Error('该费用变更类型必须填写原因')
         }
 
         const now = new Date()
+        const actualChangeType = batch.isDayClosed ? FeeChangeType.DAYCLOSE_ADJUST : changeType
+
         const feeChange: FeeChange = {
           id: uuid(),
           batchId,
-          changeType,
+          changeType: actualChangeType,
           amount,
           reason,
           operator,
@@ -1562,17 +1901,17 @@ export const useAppStore = create<AppStore>()(
         }
 
         set((state) => {
-          const batch = state.batches.find((b) => b.id === batchId)
-          if (!batch) return { feeChanges: [...state.feeChanges, feeChange] }
+          const currentBatch = state.batches.find((b) => b.id === batchId)
+          if (!currentBatch) return { feeChanges: [...state.feeChanges, feeChange] }
 
-          let newDiscountAmount = batch.discountAmount
-          let newFinalAmount = batch.finalAmount
+          let newDiscountAmount = currentBatch.discountAmount
+          let newFinalAmount = currentBatch.finalAmount
 
           if (amount < 0) {
-            newDiscountAmount = batch.discountAmount + Math.abs(amount)
-            newFinalAmount = Math.max(0, batch.finalAmount + amount)
+            newDiscountAmount = currentBatch.discountAmount + Math.abs(amount)
+            newFinalAmount = Math.max(0, currentBatch.finalAmount + amount)
           } else {
-            newFinalAmount = batch.finalAmount + amount
+            newFinalAmount = currentBatch.finalAmount + amount
           }
 
           return {
@@ -1638,6 +1977,7 @@ export const useAppStore = create<AppStore>()(
             discountAmount: 0,
             packageDeduction: 0,
             overdueFee: 0,
+            compensationAmount: 0,
             adjustments: [],
             totalPayable: 0,
             clothBreakdown: {},
@@ -1646,6 +1986,7 @@ export const useAppStore = create<AppStore>()(
 
         const clothingItems = state.clothingItems.filter((c) => c.batchId === batchId)
         const feeChanges = state.feeChanges.filter((f) => f.batchId === batchId)
+        const compensations = state.compensations.filter((c) => c.batchId === batchId)
 
         const customer = state.customers.find((c) => c.id === batch.customerId)
         const member = customer?.memberId
@@ -1661,12 +2002,13 @@ export const useAppStore = create<AppStore>()(
             clothingItems,
             partialClothingIds,
             feeChanges,
+            compensations,
             member,
             pricePackage
           )
         }
 
-        return calcBatchFee(batch, clothingItems, feeChanges, member, pricePackage)
+        return calcBatchFee(batch, clothingItems, feeChanges, compensations, member, pricePackage)
       },
 
       getMemberById: (memberId) => {

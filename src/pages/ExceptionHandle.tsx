@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, RotateCcw, Receipt, Lock, DollarSign, Inbox } from 'lucide-react';
+import { AlertCircle, RotateCcw, Receipt, Lock, DollarSign, Inbox, RefreshCcw, Ban, CheckCircle2 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';
@@ -12,6 +12,8 @@ import { LockAuditTable } from '../components/exceptions/LockAuditTable';
 import { useAppStore } from '../store/useAppStore';
 import type { ClothingItem, Compensation as CompensationType, RewashRecord, LockRecord, FeeChange } from '../types';
 import { ClothingStatus, RewashStatus, CompensationStatus, LockType, FeeChangeType } from '../types';
+import { isRewashFailed } from '../utils/statusCalc';
+import { getFeeChangeTypeLabel } from '../utils/statusCalc';
 
 const TAB_ITEMS = [
   { key: 'qc', label: '质检异常', icon: AlertCircle },
@@ -47,6 +49,8 @@ export default function ExceptionHandle() {
   const feeChanges = useAppStore((s) => s.feeChanges);
   const lockBatch = useAppStore((s) => s.lockBatch);
   const unlockBatch = useAppStore((s) => s.unlockBatch);
+  const completeRewash = useAppStore((s) => s.completeRewash);
+  const markRewashFailed = useAppStore((s) => s.markRewashFailed);
 
   const [activeTab, setActiveTab] = React.useState('qc');
   const [showRewash, setShowRewash] = React.useState(false);
@@ -236,6 +240,7 @@ export default function ExceptionHandle() {
                     <th className="px-4 py-3 text-left font-medium text-slate-600">状态</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">返洗次数</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">记录时间</th>
+                    <th className="px-4 py-3 text-center font-medium text-slate-600">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -251,10 +256,48 @@ export default function ExceptionHandle() {
                             [RewashStatus.PENDING]: { label: '待返洗', variant: 'warning' },
                             [RewashStatus.PROCESSING]: { label: '返洗中', variant: 'info' },
                             [RewashStatus.COMPLETED]: { label: '已完成', variant: 'success' },
+                            [RewashStatus.FAILED]: { label: '返洗失败', variant: 'danger' },
                           }} />
                         </td>
-                        <td className="px-4 py-3 text-slate-600">第 {clothing?.rewashCount ?? 0} 次</td>
+                        <td className="px-4 py-3 text-slate-600">
+                          第 {clothing?.rewashCount ?? 0} 次
+                          {clothing?.rewashFailedCount > 0 && (
+                            <span className="text-red-600 font-medium ml-2">({clothing.rewashFailedCount} 次失败)</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-slate-500">{formatDateTime(r.createdAt)}</td>
+                        <td className="px-4 py-3 text-center">
+                          {r.status === RewashStatus.PROCESSING && (
+                            <div className="flex justify-center gap-1">
+                              <Button 
+                                variant="success" 
+                                size="sm" 
+                                onClick={() => completeRewash(r.clothingId, 'manager', '返洗完成')}
+                              >
+                                <CheckCircle2 className="w-3 h-3 mr-1" />完成
+                              </Button>
+                              <Button 
+                                variant="danger" 
+                                size="sm" 
+                                onClick={() => markRewashFailed(r.clothingId, 'manager', '返洗失败，无法恢复')}
+                              >
+                                <Ban className="w-3 h-3 mr-1" />失败
+                              </Button>
+                            </div>
+                          )}
+                          {r.status === RewashStatus.PENDING && (
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => {
+                                setCurrentClothing(clothing || null);
+                                setShowRewash(true);
+                              }}
+                            >
+                              <RefreshCcw className="w-3 h-3 mr-1" />开始返洗
+                            </Button>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -294,7 +337,7 @@ export default function ExceptionHandle() {
                       <td className="px-4 py-3">
                         <StatusTag status={c.status} statusMap={{
                           [CompensationStatus.PENDING]: { label: '待审批', variant: 'warning' },
-                          [CompensationStatus.APPROVED]: { label: '已审批', variant: 'success' },
+                          [CompensationStatus.APPROVED]: { label: '已赔付', variant: 'success' },
                           [CompensationStatus.REJECTED]: { label: '已驳回', variant: 'danger' },
                         }} />
                       </td>
@@ -371,6 +414,9 @@ export default function ExceptionHandle() {
                           [FeeChangeType.REDUCTION]: { label: '减免', variant: 'warning' },
                           [FeeChangeType.OVERDUE]: { label: '超期费', variant: 'danger' },
                           [FeeChangeType.ADJUST]: { label: '调整', variant: 'info' },
+                          [FeeChangeType.COMPENSATION]: { label: '赔付', variant: 'success' },
+                          [FeeChangeType.CORRECTION]: { label: '冲正', variant: 'warning' },
+                          [FeeChangeType.DAYCLOSE_ADJUST]: { label: '日结调整', variant: 'info' },
                         }} />
                       </td>
                       <td className={'px-4 py-3 text-right font-mono font-semibold ' + (f.amount < 0 ? 'text-success-600' : 'text-danger-600')}>

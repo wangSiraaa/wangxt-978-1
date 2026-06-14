@@ -2,7 +2,7 @@ import * as React from 'react';
 import { cn } from '../../lib/utils';
 import { Card, CardHeader, CardTitle, CardBody } from '../ui/Card';
 import { Badge } from '../ui/Badge';
-import { Calculator, Clock, Percent, Tag, MinusCircle, CreditCard, Receipt } from 'lucide-react';
+import { Calculator, Clock, Percent, Tag, MinusCircle, CreditCard, Receipt, AlertTriangle, RefreshCw } from 'lucide-react';
 
 export interface FeeBreakdownItem {
   label: string;
@@ -20,6 +20,10 @@ export interface FeeBreakdownProps {
   packageDeduction?: number;
   reductions?: { reason: string; amount: number }[];
   reductionAmount?: number;
+  compensationAmount?: number;
+  corrections?: { reason: string; amount: number }[];
+  dayCloseAdjust?: number;
+  isDayClosed?: boolean;
   payAmount: number;
   className?: string;
 }
@@ -32,10 +36,15 @@ export const FeeBreakdown: React.FC<FeeBreakdownProps> = ({
   packageDeduction = 0,
   reductions,
   reductionAmount = 0,
+  compensationAmount = 0,
+  corrections,
+  dayCloseAdjust = 0,
+  isDayClosed = false,
   payAmount,
   className,
 }) => {
   const totalReduction = reductionAmount + (reductions?.reduce((s, r) => s + r.amount, 0) || 0);
+  const totalCorrection = corrections?.reduce((s, r) => s + r.amount, 0) || 0;
 
   return (
     <Card className={className}>
@@ -126,6 +135,67 @@ export const FeeBreakdown: React.FC<FeeBreakdownProps> = ({
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {compensationAmount > 0 && (
+            <div className="px-4 py-3 bg-red-50/40">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-500" />
+                  <span className="text-sm text-red-800 font-medium">赔付金额</span>
+                </div>
+                <span className="text-sm font-bold text-red-700 tabular-nums">
+                  -¥{compensationAmount.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {totalCorrection !== 0 && (
+            <div className="px-4 py-3 bg-amber-50/40">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <RefreshCw className="w-4 h-4 text-amber-500" />
+                  <span className="text-sm text-amber-800 font-medium">费用冲正</span>
+                </div>
+                <span className={cn('text-sm font-bold tabular-nums', totalCorrection < 0 ? 'text-success-700' : 'text-danger-700')}>
+                  {totalCorrection < 0 ? '-' : '+'}¥{Math.abs(totalCorrection).toFixed(2)}
+                </span>
+              </div>
+              {corrections && corrections.length > 0 && (
+                <div className="mt-2 pl-6 space-y-1">
+                  {corrections.map((r, i) => (
+                    <div key={i} className="flex items-center justify-between text-[11px] text-amber-700/80">
+                      <span className="truncate max-w-[180px]">{r.reason}</span>
+                      <span className="tabular-nums">{r.amount < 0 ? '-' : '+'}¥{Math.abs(r.amount).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {dayCloseAdjust !== 0 && (
+            <div className="px-4 py-3 bg-slate-100/60">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Calculator className="w-4 h-4 text-slate-500" />
+                  <span className="text-sm text-slate-700 font-medium">日结调整</span>
+                </div>
+                <span className={cn('text-sm font-bold tabular-nums', dayCloseAdjust < 0 ? 'text-success-700' : 'text-danger-700')}>
+                  {dayCloseAdjust < 0 ? '-' : '+'}¥{Math.abs(dayCloseAdjust).toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {isDayClosed && (
+            <div className="px-4 py-2 bg-amber-100 border-t border-amber-200">
+              <div className="flex items-center gap-2 text-[11px] text-amber-800">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>已日结锁定，如需调整请生成日结调整记录</span>
+              </div>
             </div>
           )}
 

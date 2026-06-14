@@ -1,4 +1,4 @@
-import { BatchStatus, ClothingStatus, ClothingQcStatus, MemberLevel, PricePackageType } from './fee'
+import { BatchStatus, ClothingStatus, ClothingQcStatus, MemberLevel, PricePackageType, ClothingStatusTransition } from './fee'
 
 export interface Store {
   id: string
@@ -50,9 +50,12 @@ export interface ClothingItem {
   outsourcedVendor: string | null
   isRewashed: boolean
   rewashCount: number
+  rewashFailedCount: number
   isPickedUp: boolean
   pickedUpAt: Date | null
+  transferId: string | null
   notified?: boolean
+  statusHistory: ClothingStatusTransition[]
 }
 
 export interface Batch {

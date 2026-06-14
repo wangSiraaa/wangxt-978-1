@@ -1,18 +1,40 @@
-import type { Batch, ClothingItem, FeeChange, Customer, Member, PricePackage } from '../types'
-import { WASH_ITEMS, MEMBER_DISCOUNTS, OVERDUE_RULES, FeeChangeType } from '../types'
+import type { Batch, ClothingItem, FeeChange, Customer, Member, PricePackage, Compensation } from '../types'
+import { WASH_ITEMS, MEMBER_DISCOUNTS, OVERDUE_RULES, FeeChangeType, CompensationStatus } from '../types'
 import { getOverdueDays } from './dateUtil'
+
+export interface FeeValidationResult {
+  valid: boolean
+  reason?: string
+  allowedChangeTypes: FeeChangeType[]
+}
+
+export interface FeeAdjustmentLog {
+  id: string
+  batchId: string
+  clothId?: string
+  type: FeeChangeType
+  amount: number
+  beforeAmount: number
+  afterAmount: number
+  reason: string
+  operator: string
+  timestamp: Date
+  isDayClosedAdjustment: boolean
+}
 
 export interface FeeBreakdown {
   baseFee: number
   discountAmount: number
   packageDeduction: number
   overdueFee: number
+  compensationAmount: number
   adjustments: FeeChange[]
   totalPayable: number
   clothBreakdown: Record<string, {
     basePrice: number
     discount: number
     overdueShare: number
+    compensationShare: number
     final: number
   }>
 }
@@ -121,6 +143,7 @@ export function calcBatchFee(
   batch: Batch,
   clothingItems: ClothingItem[],
   feeChanges: FeeChange[],
+  compensations: Compensation[] = [],
   member?: Member | null,
   pricePackage?: PricePackage | null,
   now: Date = new Date()
@@ -135,6 +158,12 @@ export function calcBatchFee(
   const overdueFee = calcOverdueFee(batch.expectedTime, now)
   const overdueShare = distributeOverdueFee(overdueFee, unpickedClothes, clothBase)
 
+  const { totalCompensation, clothCompensation } = calcCompensationFee(
+    batch.id,
+    unpickedClothes,
+    compensations,
+  )
+
   const clothBreakdown: FeeBreakdown['clothBreakdown'] = {}
   unpickedClothes.forEach((c) => {
     const base = clothBase[c.id]
@@ -142,14 +171,15 @@ export function calcBatchFee(
       basePrice: base.basePrice,
       discount: base.discount,
       overdueShare: overdueShare[c.id] || 0,
-      final: Math.round((base.final + (overdueShare[c.id] || 0)) * 100) / 100,
+      compensationShare: clothCompensation[c.id] || 0,
+      final: Math.round((base.final + (overdueShare[c.id] || 0) - (clothCompensation[c.id] || 0)) * 100) / 100,
     }
   })
 
   const batchFeeChanges = feeChanges.filter((f) => f.batchId === batch.id)
   const adjustmentTotal = batchFeeChanges.reduce((sum, a) => sum + a.amount, 0)
 
-  const subTotal = Math.round((baseFee - discountAmount - packageDeduction + overdueFee) * 100) / 100
+  const subTotal = Math.round((baseFee - discountAmount - packageDeduction + overdueFee - totalCompensation) * 100) / 100
   const totalPayable = Math.max(0, Math.round((subTotal + adjustmentTotal) * 100) / 100)
 
   return {
@@ -157,6 +187,7 @@ export function calcBatchFee(
     discountAmount,
     packageDeduction,
     overdueFee,
+    compensationAmount: totalCompensation,
     adjustments: batchFeeChanges,
     totalPayable,
     clothBreakdown,
@@ -168,11 +199,12 @@ export function calcPartialPickupFee(
   clothingItems: ClothingItem[],
   pickupClothingIds: string[],
   feeChanges: FeeChange[],
+  compensations: Compensation[] = [],
   member?: Member | null,
   pricePackage?: PricePackage | null,
   now: Date = new Date()
 ): FeeBreakdown {
-  const fullBreakdown = calcBatchFee(batch, clothingItems, feeChanges, member, pricePackage, now)
+  const fullBreakdown = calcBatchFee(batch, clothingItems, feeChanges, compensations, member, pricePackage, now)
   const pickupClothes = clothingItems.filter(
     (c) => pickupClothingIds.includes(c.id) && !c.isPickedUp
   )
@@ -189,6 +221,10 @@ export function calcPartialPickupFee(
     (sum, c) => sum + (fullBreakdown.clothBreakdown[c.id]?.overdueShare || 0),
     0
   )
+  const pickupCompensation = pickupClothes.reduce(
+    (sum, c) => sum + (fullBreakdown.clothBreakdown[c.id]?.compensationShare || 0),
+    0
+  )
 
   const totalBaseFee = clothingItems.reduce(
     (sum, c) => sum + (fullBreakdown.clothBreakdown[c.id]?.basePrice || 0),
@@ -200,7 +236,8 @@ export function calcPartialPickupFee(
   const relatedAdjustments = fullBreakdown.adjustments.filter(
     (a) =>
       a.changeType === FeeChangeType.DISCOUNT ||
-      a.changeType === FeeChangeType.REDUCTION
+      a.changeType === FeeChangeType.REDUCTION ||
+      a.changeType === FeeChangeType.COMPENSATION
   )
   const pickupAdjustmentTotal = relatedAdjustments.reduce((sum, a) => sum + a.amount, 0)
 
@@ -209,7 +246,7 @@ export function calcPartialPickupFee(
     clothBreakdown[c.id] = fullBreakdown.clothBreakdown[c.id]
   })
 
-  const subTotal = Math.round((pickupBaseFee - pickupDiscount - pickupPackageDeduction + pickupOverdue) * 100) / 100
+  const subTotal = Math.round((pickupBaseFee - pickupDiscount - pickupPackageDeduction + pickupOverdue - pickupCompensation) * 100) / 100
   const totalPayable = Math.max(0, Math.round((subTotal + pickupAdjustmentTotal) * 100) / 100)
 
   return {
@@ -217,6 +254,7 @@ export function calcPartialPickupFee(
     discountAmount: Math.round(pickupDiscount * 100) / 100,
     packageDeduction: pickupPackageDeduction,
     overdueFee: Math.round(pickupOverdue * 100) / 100,
+    compensationAmount: pickupCompensation,
     adjustments: relatedAdjustments,
     totalPayable,
     clothBreakdown,
@@ -303,4 +341,134 @@ export function getWashProjectName(projectKey: string): string {
 
 export function getWashProjectPrice(projectKey: string): number {
   return WASH_ITEMS[projectKey]?.price || 0
+}
+
+export function validateFeeChange(
+  batch: Batch,
+  changeType: FeeChangeType,
+  operatorRole: string = 'cashier',
+): FeeValidationResult {
+  if (batch.isDayClosed) {
+    if (changeType !== FeeChangeType.DAYCLOSE_ADJUST) {
+      return {
+        valid: false,
+        reason: '已日结的批次只能生成日结调整记录',
+        allowedChangeTypes: [FeeChangeType.DAYCLOSE_ADJUST],
+      }
+    }
+    if (operatorRole !== 'manager') {
+      return {
+        valid: false,
+        reason: '日结调整需要店长权限',
+        allowedChangeTypes: [],
+      }
+    }
+  }
+
+  if (changeType === FeeChangeType.REDUCTION || changeType === FeeChangeType.CORRECTION) {
+    if (operatorRole !== 'manager') {
+      return {
+        valid: false,
+        reason: '减免和冲正需要店长权限',
+        allowedChangeTypes: [FeeChangeType.DISCOUNT, FeeChangeType.ADJUST],
+      }
+    }
+  }
+
+  return {
+    valid: true,
+    allowedChangeTypes: [
+      FeeChangeType.DISCOUNT,
+      FeeChangeType.REDUCTION,
+      FeeChangeType.ADJUST,
+      FeeChangeType.CORRECTION,
+      FeeChangeType.COMPENSATION,
+    ],
+  }
+}
+
+export function validateFeeChangeReason(
+  changeType: FeeChangeType,
+  reason: string,
+): boolean {
+  const requiresReason = [
+    FeeChangeType.REDUCTION,
+    FeeChangeType.CORRECTION,
+    FeeChangeType.DAYCLOSE_ADJUST,
+    FeeChangeType.COMPENSATION,
+  ]
+  if (requiresReason.includes(changeType)) {
+    return reason !== undefined && reason !== null && reason.trim().length > 0
+  }
+  return true
+}
+
+export function calculateCompensationAmount(
+  compensations: Compensation[],
+  clothingIds: string[],
+): number {
+  return compensations
+    .filter(
+      (c) =>
+        clothingIds.includes(c.clothingId) &&
+        c.status === CompensationStatus.APPROVED,
+    )
+    .reduce((sum, c) => sum + c.approveAmount, 0)
+}
+
+export function distributeCompensation(
+  compensationAmount: number,
+  clothingItems: ClothingItem[],
+  clothBase: Record<string, { basePrice: number; discount: number; final: number }>,
+): Record<string, number> {
+  const result: Record<string, number> = {}
+  const availableClothes = clothingItems.filter((c) => !c.isPickedUp)
+  const totalFinal = availableClothes.reduce(
+    (sum, c) => sum + (clothBase[c.id]?.final || 0),
+    0,
+  )
+
+  if (totalFinal <= 0 || compensationAmount <= 0) {
+    availableClothes.forEach((c) => {
+      result[c.id] = 0
+    })
+    return result
+  }
+
+  let allocated = 0
+  availableClothes.forEach((c, idx) => {
+    const share =
+      idx === availableClothes.length - 1
+        ? compensationAmount - allocated
+        : Math.round(
+            ((clothBase[c.id]?.final || 0) / totalFinal) * compensationAmount * 100,
+          ) / 100
+    result[c.id] = share
+    allocated = Math.round((allocated + share) * 100) / 100
+  })
+
+  return result
+}
+
+export function calcCompensationFee(
+  batchId: string,
+  clothingItems: ClothingItem[],
+  compensations: Compensation[],
+): { totalCompensation: number; clothCompensation: Record<string, number> } {
+  const batchCompensations = compensations.filter((c) => c.batchId === batchId)
+  const clothIds = clothingItems.map((c) => c.id)
+  const totalCompensation = calculateCompensationAmount(batchCompensations, clothIds)
+
+  const clothBase: Record<string, { basePrice: number; discount: number; final: number }> = {}
+  clothingItems.forEach((c) => {
+    clothBase[c.id] = { basePrice: c.basePrice, discount: 0, final: c.basePrice }
+  })
+
+  const clothCompensation = distributeCompensation(
+    totalCompensation,
+    clothingItems,
+    clothBase,
+  )
+
+  return { totalCompensation, clothCompensation }
 }

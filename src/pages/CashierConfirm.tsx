@@ -1,15 +1,17 @@
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calculator, Percent, CheckCircle, ChevronDown, ChevronUp, Inbox } from 'lucide-react';
+import { Calculator, Percent, CheckCircle, ChevronDown, ChevronUp, Inbox, RefreshCw, AlertTriangle, Lock, UserCheck } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/Button';
 import { Checkbox } from '../components/ui/Checkbox';
 import { EmptyState } from '../components/ui/EmptyState';
+import { Badge } from '../components/ui/Badge';
 import { FeeBreakdown } from '../components/cashier/FeeBreakdown';
 import { DayClosePanel } from '../components/cashier/DayClosePanel';
 import { FeeTrialModal } from '../components/cashier/FeeTrialModal';
 import type { FeeTrialResult } from '../components/cashier/FeeTrialModal';
 import { ReductionModal } from '../components/cashier/ReductionModal';
+import { CorrectionModal } from '../components/cashier/CorrectionModal';
 import { useAppStore } from '../store/useAppStore';
 import type { FeeBreakdown as FeeBreakdownType } from '../utils/feeCalc';
 import type { Batch, ClothingItem } from '../types';
@@ -23,6 +25,7 @@ export default function CashierConfirm() {
   const markPickedUp = useAppStore((s) => s.markPickedUp);
   const calculateBatchFee = useAppStore((s) => s.calculateBatchFee);
   const applyFeeChange = useAppStore((s) => s.applyFeeChange);
+  const applyCorrection = useAppStore((s) => s.applyCorrection);
   const markDayClosed = useAppStore((s) => s.markDayClosed);
 
   const readyBatches = React.useMemo(() => {
@@ -39,6 +42,7 @@ export default function CashierConfirm() {
   const [breakdown, setBreakdown] = React.useState<FeeBreakdownType | null>(null);
   const [showTrial, setShowTrial] = React.useState(false);
   const [showReduction, setShowReduction] = React.useState(false);
+  const [showCorrection, setShowCorrection] = React.useState(false);
   const [dayCloseOpen, setDayCloseOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
 
@@ -115,6 +119,14 @@ export default function CashierConfirm() {
     const newBreakdown = calculateBatchFee(selectedBatchId, selectedClothingIds);
     setBreakdown(newBreakdown);
     setShowReduction(false);
+  };
+
+  const handleConfirmCorrection = (amount: number, reason: string) => {
+    if (!selectedBatchId || !breakdown) return;
+    applyCorrection(selectedBatchId, amount, reason, 'cashier');
+    const newBreakdown = calculateBatchFee(selectedBatchId, selectedClothingIds);
+    setBreakdown(newBreakdown);
+    setShowCorrection(false);
   };
 
   const handleConfirmPayment = () => {
@@ -285,16 +297,53 @@ export default function CashierConfirm() {
                       <span className="text-slate-700">{selectedBatch.customerName}</span>
                       <span className="text-slate-400 ml-2 text-sm font-mono">{selectedBatch.customerPhone}</span>
                     </div>
+                    <div className="flex items-center gap-2">
+                      {selectedBatch?.isDayClosed && (
+                        <Badge variant="success" className="text-[10px] flex items-center gap-0.5">
+                          <Lock className="w-3 h-3" /> 已日结
+                        </Badge>
+                      )}
+                      {selectedBatch?.authorizedPickup && (
+                        <Badge variant="info" className="text-[10px] flex items-center gap-0.5">
+                          <UserCheck className="w-3 h-3" /> 代取授权
+                        </Badge>
+                      )}
+                      {selectedBatch?.isPickupCodeLocked && (
+                        <Badge variant="danger" className="text-[10px] flex items-center gap-0.5">
+                          <AlertTriangle className="w-3 h-3" /> 取件码锁定
+                        </Badge>
+                      )}
+                    </div>
                     <div className="flex gap-2">
                       <Button variant="outline" size="sm" onClick={() => setShowTrial(true)} disabled={selectedClothingIds.length === 0}>
                         <Calculator className="w-3.5 h-3.5 mr-1" />
                         费用试算
                       </Button>
-                      <Button variant="accent" size="sm" onClick={() => setShowReduction(true)} disabled={!breakdown || breakdown.totalPayable <= 0}>
+                      <Button 
+                        variant="accent" 
+                        size="sm" 
+                        onClick={() => setShowReduction(true)} 
+                        disabled={!breakdown || breakdown.totalPayable <= 0 || selectedBatch?.isDayClosed}
+                      >
                         <Percent className="w-3.5 h-3.5 mr-1" />
                         减免
                       </Button>
-                      <Button variant="success" size="sm" onClick={handleConfirmPayment} loading={loading} disabled={selectedClothingIds.length === 0}>
+                      <Button 
+                        variant="warning" 
+                        size="sm" 
+                        onClick={() => setShowCorrection(true)} 
+                        disabled={!breakdown}
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 mr-1" />
+                        冲正
+                      </Button>
+                      <Button 
+                        variant="success" 
+                        size="sm" 
+                        onClick={handleConfirmPayment} 
+                        loading={loading} 
+                        disabled={selectedClothingIds.length === 0 || selectedBatch?.isDayClosed}
+                      >
                         <CheckCircle className="w-3.5 h-3.5 mr-1" />
                         确认收费
                       </Button>
@@ -345,6 +394,12 @@ export default function CashierConfirm() {
                       reductionAmount={breakdown.adjustments
                         .filter((a) => a.changeType === FeeChangeType.REDUCTION)
                         .reduce((s, a) => s + Math.abs(a.amount), 0)}
+                      compensationAmount={breakdown.compensationAmount || 0}
+                      corrections={breakdown.adjustments
+                        .filter((a) => a.changeType === FeeChangeType.CORRECTION)
+                        .map((a) => ({ reason: a.reason, amount: a.amount }))}
+                      dayCloseAdjust={breakdown.totalAdjust || 0}
+                      isDayClosed={selectedBatch?.isDayClosed || false}
                       payAmount={breakdown.totalPayable}
                     />
                   </div>
@@ -392,6 +447,14 @@ export default function CashierConfirm() {
         onClose={() => setShowReduction(false)}
         onConfirm={handleConfirmReduction}
         currentAmount={breakdown?.totalPayable || 0}
+      />
+
+      <CorrectionModal
+        open={showCorrection}
+        onClose={() => setShowCorrection(false)}
+        onConfirm={handleConfirmCorrection}
+        currentAmount={breakdown?.totalPayable || 0}
+        isDayClosed={selectedBatch?.isDayClosed || false}
       />
     </AppLayout>
   );

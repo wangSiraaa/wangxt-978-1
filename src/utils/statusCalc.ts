@@ -1,5 +1,5 @@
-import type { Batch, ClothingItem, QcRecord, LockRecord, FeeChange } from '../types'
-import { ClothingStatus, ClothingQcStatus, BatchStatus } from '../types'
+import type { Batch, ClothingItem, QcRecord, LockRecord, FeeChange, ClothingStatusTransition } from '../types'
+import { ClothingStatus, ClothingQcStatus, BatchStatus, RewashStatus } from '../types'
 import { isOverdue, getOverdueDays } from './dateUtil'
 
 export interface BatchStatusResult {
@@ -18,6 +18,165 @@ export interface BatchStatusResult {
   qcFailedCount: number
   qcExceptionCount: number
   pendingQcCount: number
+  rewashingCount: number
+  rewashFailedCount: number
+  outsourcedCount: number
+  transferredCount: number
+  canRevert: boolean
+  isDayClosed: boolean
+}
+
+export interface ClothStatusValidationResult {
+  valid: boolean
+  reason?: string
+  allowedTransitions: ClothingStatus[]
+}
+
+export interface StatusTransitionLog {
+  clothingId: string
+  from: ClothingStatus
+  to: ClothingStatus
+  operator: string
+  reason?: string
+  timestamp: Date
+}
+
+const STATUS_TRANSITION_MAP: Record<ClothingStatus, ClothingStatus[]> = {
+  [ClothingStatus.PENDING_WASH]: [
+    ClothingStatus.WASHING,
+    ClothingStatus.OUTSOURCED,
+    ClothingStatus.TRANSFERRED,
+  ],
+  [ClothingStatus.WASHING]: [
+    ClothingStatus.PENDING_QC,
+    ClothingStatus.REWASHING,
+  ],
+  [ClothingStatus.PENDING_QC]: [
+    ClothingStatus.QC_PASSED,
+    ClothingStatus.QC_FAILED,
+    ClothingStatus.QC_EXCEPTION,
+    ClothingStatus.QC_ABNORMAL,
+  ],
+  [ClothingStatus.QC_PASSED]: [
+    ClothingStatus.READY,
+    ClothingStatus.REWASHING,
+  ],
+  [ClothingStatus.QC_FAILED]: [
+    ClothingStatus.REWASHING,
+    ClothingStatus.READY,
+  ],
+  [ClothingStatus.QC_EXCEPTION]: [
+    ClothingStatus.REWASHING,
+    ClothingStatus.READY,
+  ],
+  [ClothingStatus.QC_ABNORMAL]: [
+    ClothingStatus.REWASHING,
+    ClothingStatus.READY,
+  ],
+  [ClothingStatus.REWASHING]: [
+    ClothingStatus.PENDING_QC,
+    ClothingStatus.REWASH_FAILED,
+  ],
+  [ClothingStatus.REWASH_FAILED]: [
+    ClothingStatus.REWASHING,
+    ClothingStatus.READY,
+  ],
+  [ClothingStatus.READY]: [
+    ClothingStatus.PICKED_UP,
+    ClothingStatus.REWASHING,
+    ClothingStatus.TRANSFERRED,
+  ],
+  [ClothingStatus.PICKED_UP]: [],
+  [ClothingStatus.TRANSFERRED]: [
+    ClothingStatus.READY,
+  ],
+  [ClothingStatus.OUTSOURCED]: [
+    ClothingStatus.OUTSOURCED_RETURNED,
+  ],
+  [ClothingStatus.OUTSOURCED_RETURNED]: [
+    ClothingStatus.PENDING_QC,
+  ],
+}
+
+export function validateClothStatusTransition(
+  clothing: ClothingItem,
+  targetStatus: ClothingStatus,
+  batch: Batch,
+): ClothStatusValidationResult {
+  if (clothing.status === ClothingStatus.PICKED_UP) {
+    return {
+      valid: false,
+      reason: '已取走的衣物不能修改状态',
+      allowedTransitions: [],
+    }
+  }
+
+  if (batch.isDayClosed) {
+    return {
+      valid: false,
+      reason: '已日结的批次不能修改衣物状态',
+      allowedTransitions: [],
+    }
+  }
+
+  if (batch.isLocked) {
+    return {
+      valid: false,
+      reason: '批次已锁定，不能修改衣物状态',
+      allowedTransitions: [],
+    }
+  }
+
+  const allowedTransitions = STATUS_TRANSITION_MAP[clothing.status] || []
+  const valid = allowedTransitions.includes(targetStatus)
+
+  return {
+    valid,
+    reason: valid ? undefined : `状态流转不允许: ${clothing.status} → ${targetStatus}`,
+    allowedTransitions,
+  }
+}
+
+export function canRevertClothStatus(
+  clothing: ClothingItem,
+  batch: Batch,
+): boolean {
+  if (clothing.isPickedUp) {
+    return false
+  }
+  if (batch.isDayClosed) {
+    return false
+  }
+  if (batch.isLocked) {
+    return false
+  }
+  return true
+}
+
+export function createStatusTransition(
+  clothingId: string,
+  fromStatus: ClothingStatus,
+  toStatus: ClothingStatus,
+  operator: string,
+  reason?: string,
+): ClothingStatusTransition {
+  return {
+    clothingId,
+    fromStatus,
+    toStatus,
+    operator,
+    reason,
+    timestamp: new Date(),
+  }
+}
+
+export function getClothStatusRiskLevel(clothing: ClothingItem): 'normal' | 'warning' | 'danger' {
+  if (clothing.status === ClothingStatus.REWASH_FAILED) return 'danger'
+  if (clothing.rewashFailedCount >= 2) return 'danger'
+  if (clothing.rewashCount >= 2) return 'warning'
+  if (clothing.colorRisk && clothing.colorRisk !== '无') return 'warning'
+  if (clothing.isValuable) return 'warning'
+  return 'normal'
 }
 
 function isClothReadyForPickup(clothing: ClothingItem): boolean {
@@ -31,7 +190,8 @@ function hasQcException(clothing: ClothingItem): boolean {
   return (
     clothing.status === ClothingStatus.QC_FAILED ||
     clothing.status === ClothingStatus.QC_EXCEPTION ||
-    clothing.status === ClothingStatus.QC_ABNORMAL
+    clothing.status === ClothingStatus.QC_ABNORMAL ||
+    clothing.status === ClothingStatus.REWASH_FAILED
   )
 }
 
@@ -43,7 +203,19 @@ function isInWash(clothing: ClothingItem): boolean {
   return (
     clothing.status === ClothingStatus.PENDING_WASH ||
     clothing.status === ClothingStatus.WASHING ||
-    clothing.status === ClothingStatus.REWASHING
+    clothing.status === ClothingStatus.REWASHING ||
+    clothing.status === ClothingStatus.OUTSOURCED
+  )
+}
+
+function isRewashFailed(clothing: ClothingItem): boolean {
+  return clothing.status === ClothingStatus.REWASH_FAILED
+}
+
+function isOutsourced(clothing: ClothingItem): boolean {
+  return (
+    clothing.status === ClothingStatus.OUTSOURCED ||
+    clothing.status === ClothingStatus.OUTSOURCED_RETURNED
   )
 }
 
@@ -63,8 +235,13 @@ export function calcBatchStatus(
   const readyClothCount = unpickedItems.filter((c) => isClothReadyForPickup(c)).length
   const hasException = unpickedItems.some((c) => hasQcException(c))
   const hasRewash = unpickedItems.some((c) => c.status === ClothingStatus.REWASHING)
+  const hasRewashFailed = unpickedItems.some((c) => isRewashFailed(c))
   const inQcCount = unpickedItems.filter((c) => isInQc(c)).length
   const inWashCount = unpickedItems.filter((c) => isInWash(c)).length
+  const rewashingCount = unpickedItems.filter((c) => c.status === ClothingStatus.REWASHING).length
+  const rewashFailedCount = unpickedItems.filter((c) => isRewashFailed(c)).length
+  const outsourcedCount = clothingItems.filter((c) => isOutsourced(c)).length
+  const transferredCount = clothingItems.filter((c) => c.status === ClothingStatus.TRANSFERRED).length
 
   const qcPassedCount = clothingItems.filter(
     (c) => c.qcStatus === ClothingQcStatus.PASSED
@@ -91,7 +268,7 @@ export function calcBatchStatus(
     status = BatchStatus.COMPLETED
   } else if (isLocked) {
     status = BatchStatus.LOCKED
-  } else if (hasException || hasRewash) {
+  } else if (hasException || hasRewash || hasRewashFailed) {
     status = BatchStatus.QC_FAILED
   } else if (pickedClothCount > 0 && readyClothCount > 0) {
     status = BatchStatus.PARTIAL_PICKED
@@ -117,6 +294,7 @@ export function calcBatchStatus(
     readyClothCount > 0 &&
     !hasException &&
     !hasRewash &&
+    !hasRewashFailed &&
     pendingQcCount === 0
 
   const canPartialPickup =
@@ -124,14 +302,19 @@ export function calcBatchStatus(
     !allPicked &&
     readyClothCount > 0 &&
     readyClothCount < unpickedItems.length &&
-    !hasException
+    !hasException &&
+    !hasRewashFailed
 
   const needsManagerAttention =
     isLocked ||
     hasException ||
     hasRewash ||
+    hasRewashFailed ||
     (overdue && overdueDays >= 7) ||
-    qcFailedCount > 0
+    qcFailedCount > 0 ||
+    rewashFailedCount > 0
+
+  const canRevert = !allPicked && !batch.isDayClosed
 
   return {
     status,
@@ -149,6 +332,12 @@ export function calcBatchStatus(
     qcFailedCount,
     qcExceptionCount,
     pendingQcCount,
+    rewashingCount,
+    rewashFailedCount,
+    outsourcedCount,
+    transferredCount,
+    canRevert,
+    isDayClosed: batch.isDayClosed,
   }
 }
 
@@ -158,10 +347,80 @@ export function canRevertStatus(
   lockRecords: LockRecord[] = []
 ): boolean {
   const result = calcBatchStatus(batch, clothingItems, lockRecords)
-  return result.status !== BatchStatus.COMPLETED
+  if (result.status === BatchStatus.COMPLETED) {
+    return false
+  }
+  if (batch.isDayClosed) {
+    return false
+  }
+  const hasPickedUp = clothingItems.some((c) => c.isPickedUp)
+  if (hasPickedUp) {
+    return false
+  }
+  return true
 }
 
 export const canRevertBatch = canRevertStatus
+
+export function canCompleteRewash(
+  clothing: ClothingItem,
+  batch: Batch,
+): boolean {
+  return (
+    clothing.status === ClothingStatus.REWASHING &&
+    !batch.isDayClosed &&
+    !batch.isLocked &&
+    !clothing.isPickedUp
+  )
+}
+
+export function canMarkRewashFailed(
+  clothing: ClothingItem,
+  batch: Batch,
+): boolean {
+  return (
+    clothing.status === ClothingStatus.REWASHING &&
+    !batch.isDayClosed &&
+    !batch.isLocked &&
+    !clothing.isPickedUp
+  )
+}
+
+export function canApplyCompensation(
+  clothing: ClothingItem,
+  batch: Batch,
+): boolean {
+  return (
+    !clothing.isPickedUp &&
+    !batch.isDayClosed &&
+    (hasQcException(clothing) || isRewashFailed(clothing))
+  )
+}
+
+export function canOutsource(
+  clothing: ClothingItem,
+  batch: Batch,
+): boolean {
+  return (
+    clothing.status === ClothingStatus.PENDING_WASH &&
+    !batch.isDayClosed &&
+    !batch.isLocked &&
+    !clothing.isPickedUp
+  )
+}
+
+export function canTransfer(
+  clothing: ClothingItem,
+  batch: Batch,
+): boolean {
+  return (
+    (clothing.status === ClothingStatus.PENDING_WASH ||
+      clothing.status === ClothingStatus.READY) &&
+    !batch.isDayClosed &&
+    !batch.isLocked &&
+    !clothing.isPickedUp
+  )
+}
 
 export function canNotifyBatchPickup(
   batch: Batch,
@@ -223,11 +482,58 @@ export function getClothingStatusLabel(status: ClothingStatus): string {
     [ClothingStatus.QC_EXCEPTION]: '质检异常',
     [ClothingStatus.QC_ABNORMAL]: '质检异常',
     [ClothingStatus.REWASHING]: '返洗中',
+    [ClothingStatus.REWASH_FAILED]: '返洗失败',
     [ClothingStatus.READY]: '待取件',
     [ClothingStatus.PICKED_UP]: '已取走',
     [ClothingStatus.TRANSFERRED]: '已调拨',
+    [ClothingStatus.OUTSOURCED]: '外包中',
+    [ClothingStatus.OUTSOURCED_RETURNED]: '外包收回',
   }
   return labels[status] || status
+}
+
+export function getClothingStatusColor(status: ClothingStatus): string {
+  const colors: Record<ClothingStatus, string> = {
+    [ClothingStatus.PENDING_WASH]: '#64748B',
+    [ClothingStatus.WASHING]: '#0EA5E9',
+    [ClothingStatus.PENDING_QC]: '#8B5CF6',
+    [ClothingStatus.QC_PASSED]: '#10B981',
+    [ClothingStatus.QC_FAILED]: '#EF4444',
+    [ClothingStatus.QC_EXCEPTION]: '#F59E0B',
+    [ClothingStatus.QC_ABNORMAL]: '#F59E0B',
+    [ClothingStatus.REWASHING]: '#0EA5E9',
+    [ClothingStatus.REWASH_FAILED]: '#DC2626',
+    [ClothingStatus.READY]: '#10B981',
+    [ClothingStatus.PICKED_UP]: '#0F172A',
+    [ClothingStatus.TRANSFERRED]: '#8B5CF6',
+    [ClothingStatus.OUTSOURCED]: '#F59E0B',
+    [ClothingStatus.OUTSOURCED_RETURNED]: '#8B5CF6',
+  }
+  return colors[status] || '#64748B'
+}
+
+export function getRewashStatusLabel(status: RewashStatus): string {
+  const labels: Record<RewashStatus, string> = {
+    [RewashStatus.PENDING]: '待返洗',
+    [RewashStatus.PROCESSING]: '返洗中',
+    [RewashStatus.COMPLETED]: '返洗完成',
+    [RewashStatus.FAILED]: '返洗失败',
+    [RewashStatus.CANCELLED]: '已取消',
+  }
+  return labels[status] || status
+}
+
+export function getFeeChangeTypeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    discount: '会员折扣',
+    reduction: '费用减免',
+    overdue: '超期保管费',
+    adjust: '费用调整',
+    compensation: '赔付金额',
+    correction: '费用冲正',
+    dayclose_adjust: '日结调整',
+  }
+  return labels[type] || type
 }
 
 export function getQcStatusLabel(status: ClothingQcStatus): string {

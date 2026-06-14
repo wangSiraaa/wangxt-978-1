@@ -71,9 +71,12 @@ export enum ClothingStatus {
   QC_EXCEPTION = 'QC_EXCEPTION',
   QC_ABNORMAL = 'QC_ABNORMAL',
   REWASHING = 'REWASHING',
+  REWASH_FAILED = 'REWASH_FAILED',
   READY = 'READY',
   PICKED_UP = 'PICKED_UP',
   TRANSFERRED = 'TRANSFERRED',
+  OUTSOURCED = 'OUTSOURCED',
+  OUTSOURCED_RETURNED = 'OUTSOURCED_RETURNED',
 }
 
 export enum ClothingQcStatus {
@@ -102,13 +105,55 @@ export enum FeeChangeType {
   REDUCTION = 'reduction',
   OVERDUE = 'overdue',
   ADJUST = 'adjust',
+  COMPENSATION = 'compensation',
+  CORRECTION = 'correction',
+  DAYCLOSE_ADJUST = 'dayclose_adjust',
 }
 
 export enum RewashStatus {
   PENDING = 'PENDING',
   PROCESSING = 'PROCESSING',
   COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
   CANCELLED = 'CANCELLED',
+}
+
+export interface ClothingStatusTransition {
+  fromStatus: ClothingStatus
+  toStatus: ClothingStatus
+  operator: string
+  reason?: string
+  timestamp: Date
+}
+
+export interface ClothingStatusHistory {
+  clothingId: string
+  transitions: ClothingStatusTransition[]
+}
+
+export interface ClothLevelDetail {
+  id: string
+  barcode: string
+  clothingType: string
+  color: string
+  colorRisk: string
+  valuation: number
+  isValuable: boolean
+  washProject: string
+  basePrice: number
+  status: ClothingStatus
+  qcStatus: ClothingQcStatus
+  isOutsourced: boolean
+  outsourcedVendor: string | null
+  isRewashed: boolean
+  rewashCount: number
+  isPickedUp: boolean
+  pickedUpAt: Date | null
+  statusHistory: ClothingStatusTransition[]
+  qcRecords: QcRecord[]
+  rewashRecords: RewashRecord[]
+  compensationRecords: Compensation[]
+  transferRecords: Transfer[]
 }
 
 export enum CompensationStatus {
