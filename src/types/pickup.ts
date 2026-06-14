@@ -1,8 +1,12 @@
 import { LockType, TransferStatus } from './fee'
 
+export type { Transfer } from './fee'
+export { LockType, TransferStatus }
+
 export interface PickupLog {
   id: string
-  batchId: string
+  batchId: string | null
+  contextKey: string
   inputCode: string | null
   inputPhone: string | null
   isSuccess: boolean
@@ -13,7 +17,8 @@ export interface PickupLog {
 
 export interface LockRecord {
   id: string
-  batchId: string
+  batchId: string | null
+  contextKey: string
   lockType: LockType
   reason: string
   isUnlocked: boolean
@@ -23,15 +28,4 @@ export interface LockRecord {
   lockedAt: Date
   unlockedAt: Date | null
   autoUnlockAt: Date | null
-}
-
-export interface Transfer {
-  id: string
-  fromStoreId: string
-  toStoreId: string
-  clothingIds: string[]
-  operator: string
-  status: TransferStatus
-  createdAt: Date
-  receivedAt: Date | null
 }

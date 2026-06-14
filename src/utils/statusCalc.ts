@@ -208,7 +208,7 @@ function isInWash(clothing: ClothingItem): boolean {
   )
 }
 
-function isRewashFailed(clothing: ClothingItem): boolean {
+export function isRewashFailed(clothing: ClothingItem): boolean {
   return clothing.status === ClothingStatus.REWASH_FAILED
 }
 

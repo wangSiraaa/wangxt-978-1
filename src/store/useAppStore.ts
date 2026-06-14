@@ -159,14 +159,26 @@ interface BatchActions {
   }) => Compensation
   approveCompensation: (id: string, approvedAmount: number, approver: string) => void
   rejectCompensation: (id: string, approver: string) => void
-  verifyPickupCode: (batchId: string, code: string) => { success: boolean; remainingAttempts: number; isLocked: boolean }
+  verifyPickupInput: (type: 'code' | 'phone', input: string) => {
+    success: boolean
+    remainingAttempts: number
+    isLocked: boolean
+    matchedBatches: Batch[]
+    contextKey: string
+  }
+  verifyPickupCode: (batchId: string, code: string) => { success: boolean; remainingAttempts: number; isLocked: boolean; contextKey: string }
   verifyByPhone: (phone: string) => Batch[]
+  lockByContext: (contextKey: string, batchIds: string[], lockType: LockType, reason: string, operator?: string) => void
   lockBatch: (batchId: string, lockType: LockType, reason: string, operator?: string) => void
   unlockBatch: (batchId: string, operator: string, reason: string) => void
-  recordPickupAttempt: (batchId: string, input: string, isSuccess: boolean, failReason?: string) => void
+  unlockByContext: (contextKey: string, operator: string, reason: string) => void
+  recordPickupAttempt: (contextKey: string, batchId: string | null, input: string, isSuccess: boolean, failReason?: string) => void
   createTransfer: (fromStoreId: string, toStoreId: string, clothingIds: string[], operator: string) => Transfer
   getFailedAttempts: (batchId: string) => number
+  getFailedAttemptsByContext: (contextKey: string) => number
   isBatchLocked: (batchId: string) => boolean
+  isContextLocked: (contextKey: string) => boolean
+  getLockRecordByContext: (contextKey: string) => LockRecord | null
   applyFeeChange: (
     batchId: string,
     changeType: FeeChangeType,
@@ -569,6 +581,7 @@ function createDemoData(): BatchState {
     reason: '超期保管费（超期3天）',
     operator: 'system',
     operateTime: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
+    createdAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
   })
 
   const batch3No = generateBatchSerial('store_001', new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000))
@@ -652,6 +665,7 @@ function createDemoData(): BatchState {
     reason: '新顾客首单优惠',
     operator: 'cashier_001',
     operateTime: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
+    createdAt: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
   })
 
   const batch4No = generateBatchSerial('store_001', now)
@@ -831,12 +845,15 @@ function createDemoData(): BatchState {
     clothingId: clothingItems[2].id,
     applyAmount: 100,
     approveAmount: 0,
+    amount: 0,
     reason: '衣物洗后发现轻微染色',
     applicant: 'staff_001',
     approver: null,
+    createdBy: 'staff_001',
     status: CompensationStatus.PENDING,
     applyTime: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
     approveTime: null,
+    createdAt: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000),
   })
 
   rewashRecords.push({
@@ -853,6 +870,7 @@ function createDemoData(): BatchState {
   pickupLogs.push({
     id: uuid(),
     batchId: batch1.id,
+    contextKey: batch1.customerPhone ? `phone:${batch1.customerPhone}` : `batch:${batch1.id}`,
     inputCode: '123456',
     inputPhone: null,
     isSuccess: true,
@@ -861,51 +879,161 @@ function createDemoData(): BatchState {
     operatorIp: '127.0.0.1',
   })
 
+  const batch2CtxKey = batch2.customerPhone ? `phone:${batch2.customerPhone}` : `batch:${batch2.id}`
+
   pickupLogs.push({
     id: uuid(),
     batchId: batch2.id,
+    contextKey: batch2CtxKey,
     inputCode: '000000',
     inputPhone: null,
     isSuccess: false,
-    failReason: '取件码错误',
+    failReason: '取件码错误（第1次）',
     attemptTime: new Date(now.getTime() - 1 * 60 * 60 * 1000),
-    operatorIp: '127.0.0.1',
+    operatorIp: '192.168.1.10',
   })
 
   pickupLogs.push({
     id: uuid(),
     batchId: batch2.id,
+    contextKey: batch2CtxKey,
     inputCode: '111111',
     inputPhone: null,
     isSuccess: false,
-    failReason: '取件码错误',
+    failReason: '取件码错误（第2次）',
     attemptTime: new Date(now.getTime() - 30 * 60 * 1000),
-    operatorIp: '127.0.0.1',
+    operatorIp: '192.168.1.10',
   })
 
   pickupLogs.push({
     id: uuid(),
     batchId: batch2.id,
+    contextKey: batch2CtxKey,
     inputCode: '222222',
     inputPhone: null,
     isSuccess: false,
-    failReason: '取件码错误，已锁定',
-    attemptTime: new Date(now.getTime() - 20 * 60 * 1000),
-    operatorIp: '127.0.0.1',
+    failReason: '取件码错误（第3次），已触发锁定',
+    attemptTime: new Date(now.getTime() - 25 * 60 * 1000),
+    operatorIp: '192.168.1.10',
   })
 
   lockRecords.push({
     id: uuid(),
     batchId: batch2.id,
+    contextKey: batch2CtxKey,
     lockType: LockType.PICKUP_CODE,
-    reason: '连续3次取件码验证失败',
-    lockedAt: new Date(now.getTime() - 20 * 60 * 1000),
+    reason: '连续3次取件码验证失败，按手机号上下文累计锁定',
+    lockedAt: new Date(now.getTime() - 25 * 60 * 1000),
     lockedBy: 'system',
     isUnlocked: false,
     unlockedBy: null,
     unlockedAt: null,
     remark: null,
-    autoUnlockAt: new Date(now.getTime() + 40 * 60 * 1000),
+    autoUnlockAt: new Date(now.getTime() + 35 * 60 * 1000),
+  })
+
+  const batch4CtxKey = batch4.customerPhone ? `phone:${batch4.customerPhone}` : `batch:${batch4.id}`
+
+  pickupLogs.push({
+    id: uuid(),
+    batchId: batch4.id,
+    contextKey: batch4CtxKey,
+    inputCode: '999999',
+    inputPhone: null,
+    isSuccess: false,
+    failReason: '取件码错误（第1次，手机号上下文累计）',
+    attemptTime: new Date(now.getTime() - 4 * 60 * 60 * 1000),
+    operatorIp: '192.168.1.22',
+  })
+
+  pickupLogs.push({
+    id: uuid(),
+    batchId: batch4.id,
+    contextKey: batch4CtxKey,
+    inputCode: '888888',
+    inputPhone: null,
+    isSuccess: false,
+    failReason: '取件码错误（第2次，手机号上下文累计）',
+    attemptTime: new Date(now.getTime() - 3 * 60 * 60 * 1000),
+    operatorIp: '192.168.1.22',
+  })
+
+  pickupLogs.push({
+    id: uuid(),
+    batchId: batch4.id,
+    contextKey: batch4CtxKey,
+    inputCode: '777777',
+    inputPhone: null,
+    isSuccess: false,
+    failReason: '取件码错误（第3次，手机号上下文累计锁定触发）',
+    attemptTime: new Date(now.getTime() - 2 * 60 * 60 * 1000),
+    operatorIp: '192.168.1.22',
+  })
+
+  lockRecords.push({
+    id: uuid(),
+    batchId: batch4.id,
+    contextKey: batch4CtxKey,
+    lockType: LockType.PICKUP_CODE,
+    reason: '连续3次取件码验证失败（手机号上下文累计）',
+    lockedAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
+    lockedBy: 'system',
+    isUnlocked: false,
+    unlockedBy: null,
+    unlockedAt: null,
+    remark: null,
+    autoUnlockAt: new Date(now.getTime() + 10 * 60 * 1000),
+  })
+
+  lockRecords.push({
+    id: uuid(),
+    batchId: batch3.id,
+    contextKey: batch3.customerPhone ? `phone:${batch3.customerPhone}` : `batch:${batch3.id}`,
+    lockType: LockType.PICKUP_CODE,
+    reason: '【回归验证】连续3次取件码错误按手机号上下文累计锁定（已解锁）',
+    lockedAt: new Date(now.getTime() - 6 * 60 * 60 * 1000),
+    lockedBy: 'system',
+    isUnlocked: true,
+    unlockedBy: 'manager_001',
+    unlockedAt: new Date(now.getTime() - 5 * 60 * 60 * 1000),
+    remark: '顾客携带身份证原件前来取件，身份已核实，店长人工解锁。【审计留痕】',
+    autoUnlockAt: new Date(now.getTime() - 5 * 30 * 60 * 1000),
+  })
+
+  pickupLogs.push({
+    id: uuid(),
+    batchId: batch3.id,
+    contextKey: batch3.customerPhone ? `phone:${batch3.customerPhone}` : `batch:${batch3.id}`,
+    inputCode: '000111',
+    inputPhone: null,
+    isSuccess: false,
+    failReason: '【回归验证】取件码错误1/3（锁定前）',
+    attemptTime: new Date(now.getTime() - 6 * 60 * 60 * 1000 - 5 * 60 * 1000),
+    operatorIp: '10.0.0.88',
+  })
+
+  pickupLogs.push({
+    id: uuid(),
+    batchId: batch3.id,
+    contextKey: batch3.customerPhone ? `phone:${batch3.customerPhone}` : `batch:${batch3.id}`,
+    inputCode: '000222',
+    inputPhone: null,
+    isSuccess: false,
+    failReason: '【回归验证】取件码错误2/3（锁定前）',
+    attemptTime: new Date(now.getTime() - 6 * 60 * 60 * 1000 - 3 * 60 * 1000),
+    operatorIp: '10.0.0.88',
+  })
+
+  pickupLogs.push({
+    id: uuid(),
+    batchId: batch3.id,
+    contextKey: batch3.customerPhone ? `phone:${batch3.customerPhone}` : `batch:${batch3.id}`,
+    inputCode: '000333',
+    inputPhone: null,
+    isSuccess: false,
+    failReason: '【回归验证】取件码错误3/3 → 触发锁定',
+    attemptTime: new Date(now.getTime() - 6 * 60 * 60 * 1000),
+    operatorIp: '10.0.0.88',
   })
 
   return {
@@ -1210,6 +1338,7 @@ export const useAppStore = create<AppStore>()(
         }
 
         const transition = createStatusTransition(
+          clothingId,
           clothing.status,
           targetStatus,
           operator,
@@ -1341,6 +1470,7 @@ export const useAppStore = create<AppStore>()(
           reason,
           operator,
           operateTime: now,
+          createdAt: now,
         }
 
         set((state) => {
@@ -1665,12 +1795,15 @@ export const useAppStore = create<AppStore>()(
           clothingId: data.clothingId,
           applyAmount: data.applyAmount,
           approveAmount: 0,
+          amount: 0,
           reason: data.reason,
           applicant: data.applicant,
           approver: null,
+          createdBy: data.applicant,
           status: CompensationStatus.PENDING,
           applyTime: now,
           approveTime: null,
+          createdAt: now,
         }
 
         set((state) => ({
@@ -1713,38 +1846,138 @@ export const useAppStore = create<AppStore>()(
         }))
       },
 
+      verifyPickupInput: (type, input) => {
+        const state = get()
+
+        let matchedBatches: Batch[] = []
+        if (type === 'code') {
+          matchedBatches = state.batches.filter((b) => b.pickupCode === input)
+        } else {
+          matchedBatches = state.batches.filter((b) => b.customerPhone === input)
+        }
+
+        const isMatchSuccess = matchedBatches.length > 0
+
+        let contextKey: string
+        let lockableBatchIds: string[] = []
+
+        if (type === 'phone') {
+          contextKey = `${type}:${input}`
+          lockableBatchIds = matchedBatches.map((b) => b.id)
+          if (lockableBatchIds.length === 0) {
+            const samePhoneBatches = state.batches.filter((b) => b.customerPhone === input)
+            lockableBatchIds = samePhoneBatches.map((b) => b.id)
+          }
+        } else {
+          if (isMatchSuccess) {
+            const matchedBatch = matchedBatches[0]
+            contextKey = matchedBatch.customerPhone
+              ? `phone:${matchedBatch.customerPhone}`
+              : `batch:${matchedBatch.id}`
+            lockableBatchIds = matchedBatches.map((b) => b.id)
+          } else {
+            const prefixCode = input.substring(0, 3)
+            const fuzzyBatches = state.batches.filter((b) => {
+              if (!b.pickupCode) return false
+              if (b.pickupCode === input) return true
+              if (b.pickupCode.substring(0, 3) === prefixCode) return true
+              return false
+            })
+            if (fuzzyBatches.length > 0 && fuzzyBatches.length <= 30) {
+              const firstBatch = fuzzyBatches[0]
+              contextKey = firstBatch.customerPhone
+                ? `phone:${firstBatch.customerPhone}`
+                : `code:${input.substring(0, 3)}`
+              lockableBatchIds = fuzzyBatches.map((b) => b.id)
+            } else {
+              contextKey = `code:${prefixCode}`
+              lockableBatchIds = []
+            }
+          }
+        }
+
+        const isLocked = state.isContextLocked(contextKey)
+        if (isLocked) {
+          return { success: false, remainingAttempts: 0, isLocked: true, matchedBatches: [], contextKey }
+        }
+
+        if (isMatchSuccess) {
+          if (type === 'phone') {
+            matchedBatches.forEach((b) => {
+              state.recordPickupAttempt(contextKey, b.id, input, true)
+            })
+          } else {
+            state.recordPickupAttempt(contextKey, matchedBatches[0].id, input, true)
+          }
+          return {
+            success: true,
+            remainingAttempts: MAX_PICKUP_ATTEMPTS,
+            isLocked: false,
+            matchedBatches,
+            contextKey,
+          }
+        }
+
+        const failReason = type === 'code' ? '取件码错误' : '手机号错误'
+        const anyBatchId = lockableBatchIds.length > 0 ? lockableBatchIds[0] : null
+        state.recordPickupAttempt(contextKey, anyBatchId, input, false, failReason)
+
+        const failedAttempts = state.getFailedAttemptsByContext(contextKey)
+        const remaining = MAX_PICKUP_ATTEMPTS - failedAttempts
+
+        if (remaining <= 0) {
+          state.lockByContext(
+            contextKey,
+            lockableBatchIds,
+            LockType.PICKUP_CODE,
+            `连续输错${type === 'code' ? '取件码' : '手机号'}超过${MAX_PICKUP_ATTEMPTS}次`
+          )
+          return { success: false, remainingAttempts: 0, isLocked: true, matchedBatches: [], contextKey }
+        }
+
+        return {
+          success: false,
+          remainingAttempts: Math.max(0, remaining),
+          isLocked: false,
+          matchedBatches: [],
+          contextKey,
+        }
+      },
+
       verifyPickupCode: (batchId, code) => {
         const { getBatchById } = get()
         const batch = getBatchById(batchId)
 
         if (!batch) {
-          return { success: false, remainingAttempts: 0, isLocked: false }
+          return { success: false, remainingAttempts: 0, isLocked: false, contextKey: `batch:${batchId}` }
         }
 
-        const isLocked = get().isBatchLocked(batchId)
+        const contextKey = batch.customerPhone
+          ? `phone:${batch.customerPhone}`
+          : `batch:${batch.id}`
+
+        const isLocked = get().isContextLocked(contextKey)
         if (isLocked) {
-          return { success: false, remainingAttempts: 0, isLocked: true }
+          return { success: false, remainingAttempts: 0, isLocked: true, contextKey }
         }
 
-        const failedAttempts = get().getFailedAttempts(batchId)
-        const remaining = MAX_PICKUP_ATTEMPTS - failedAttempts - 1
+        const failedAttempts = get().getFailedAttemptsByContext(contextKey)
 
         if (batch.pickupCode === code) {
-          get().recordPickupAttempt(batchId, code, true)
-          return { success: true, remainingAttempts: Math.max(0, remaining), isLocked: false }
+          get().recordPickupAttempt(contextKey, batchId, code, true)
+          const remaining = Math.max(0, MAX_PICKUP_ATTEMPTS - failedAttempts)
+          return { success: true, remainingAttempts: remaining, isLocked: false, contextKey }
         } else {
-          get().recordPickupAttempt(batchId, code, false, '取件码错误')
+          get().recordPickupAttempt(contextKey, batchId, code, false, '取件码错误')
+          const newFailedAttempts = failedAttempts + 1
+          const remaining = MAX_PICKUP_ATTEMPTS - newFailedAttempts
 
           if (remaining <= 0) {
-            get().lockBatch(
-              batchId,
-              LockType.PICKUP_CODE,
-              `连续输错取件码超过${MAX_PICKUP_ATTEMPTS}次`
-            )
-            return { success: false, remainingAttempts: 0, isLocked: true }
+            get().lockByContext(contextKey, [batchId], LockType.PICKUP_CODE, `连续输错取件码超过${MAX_PICKUP_ATTEMPTS}次`)
+            return { success: false, remainingAttempts: 0, isLocked: true, contextKey }
           }
 
-          return { success: false, remainingAttempts: Math.max(0, remaining), isLocked: false }
+          return { success: false, remainingAttempts: Math.max(0, remaining), isLocked: false, contextKey }
         }
       },
 
@@ -1753,39 +1986,74 @@ export const useAppStore = create<AppStore>()(
         return batches.filter((b) => b.customerPhone === phone)
       },
 
-      lockBatch: (batchId, lockType, reason, operator) => {
+      lockByContext: (contextKey, batchIds, lockType, reason, operator) => {
         const now = new Date()
-        const lock: LockRecord = {
-          id: uuid(),
-          batchId,
-          lockType,
-          reason,
-          isUnlocked: false,
-          lockedBy: operator || null,
-          unlockedBy: null,
-          remark: null,
-          lockedAt: now,
-          unlockedAt: null,
-          autoUnlockAt: null,
-        }
+        const nowTime = now.getTime()
+        const AUTO_UNLOCK_MS = 60 * 60 * 1000
 
         set((state) => {
+          const newLocks: LockRecord[] = []
+          if (batchIds.length > 0) {
+            batchIds.forEach((bid) => {
+              newLocks.push({
+                id: uuid(),
+                batchId: bid,
+                contextKey,
+                lockType,
+                reason,
+                isUnlocked: false,
+                lockedBy: operator || null,
+                unlockedBy: null,
+                remark: null,
+                lockedAt: now,
+                unlockedAt: null,
+                autoUnlockAt: new Date(nowTime + AUTO_UNLOCK_MS),
+              })
+            })
+          } else {
+            newLocks.push({
+              id: uuid(),
+              batchId: null,
+              contextKey,
+              lockType,
+              reason,
+              isUnlocked: false,
+              lockedBy: operator || null,
+              unlockedBy: null,
+              remark: null,
+              lockedAt: now,
+              unlockedAt: null,
+              autoUnlockAt: new Date(nowTime + AUTO_UNLOCK_MS),
+            })
+          }
+
           const updatedBatches = state.batches.map((b) =>
-            b.id === batchId ? { ...b, isLocked: true, status: BatchStatus.LOCKED } : b
+            batchIds.includes(b.id) ? { ...b, isLocked: true, status: BatchStatus.LOCKED } : b
           )
           return {
             batches: updatedBatches,
-            lockRecords: [...state.lockRecords, lock],
+            lockRecords: [...state.lockRecords, ...newLocks],
           }
         })
       },
 
-      unlockBatch: (batchId, operator, reason) => {
+      lockBatch: (batchId, lockType, reason, operator) => {
+        get().lockByContext(`batch:${batchId}`, [batchId], lockType, reason, operator)
+      },
+
+      unlockByContext: (contextKey, operator, reason) => {
         const now = new Date()
 
         set((state) => {
+          const targetLocks = state.lockRecords.filter(
+            (l) => l.contextKey === contextKey && !l.isUnlocked
+          )
+          const affectedBatchIds = targetLocks
+            .map((l) => l.batchId)
+            .filter((id): id is string => id !== null)
+
           const updatedLocks = state.lockRecords.map((l) =>
-            l.batchId === batchId && !l.isUnlocked
+            l.contextKey === contextKey && !l.isUnlocked
               ? {
                   ...l,
                   isUnlocked: true,
@@ -1796,16 +2064,26 @@ export const useAppStore = create<AppStore>()(
               : l
           )
 
-          const batch = state.batches.find((b) => b.id === batchId)
           let updatedBatches = state.batches
-          if (batch) {
-            const batchClothing = state.clothingItems.filter((c) => c.batchId === batchId)
-            const feeChanges = state.feeChanges.filter((f) => f.batchId === batchId)
-            const qcRecords = state.qcRecords.filter((q) => q.batchId === batchId)
-            const statusResult = calcBatchStatus(batch, batchClothing, [], feeChanges, qcRecords)
-            updatedBatches = state.batches.map((b) =>
-              b.id === batchId ? { ...b, isLocked: false, status: statusResult.status } : b
-            )
+          if (affectedBatchIds.length > 0) {
+            updatedBatches = state.batches.map((b) => {
+              if (affectedBatchIds.includes(b.id)) {
+                const batchClothing = state.clothingItems.filter((c) => c.batchId === b.id)
+                const feeChanges = state.feeChanges.filter((f) => f.batchId === b.id)
+                const qcRecords = state.qcRecords.filter((q) => q.batchId === b.id)
+                const otherLocksActive = state.lockRecords.some(
+                  (l) =>
+                    l.batchId === b.id &&
+                    l.contextKey !== contextKey &&
+                    !l.isUnlocked
+                )
+                if (!otherLocksActive) {
+                  const statusResult = calcBatchStatus(b, batchClothing, [], feeChanges, qcRecords)
+                  return { ...b, isLocked: false, status: statusResult.status }
+                }
+              }
+              return b
+            })
           }
 
           return {
@@ -1815,13 +2093,18 @@ export const useAppStore = create<AppStore>()(
         })
       },
 
-      recordPickupAttempt: (batchId, input, isSuccess, failReason) => {
+      unlockBatch: (batchId, operator, reason) => {
+        get().unlockByContext(`batch:${batchId}`, operator, reason)
+      },
+
+      recordPickupAttempt: (contextKey, batchId, input, isSuccess, failReason) => {
         const now = new Date()
         const isCode = /^\d{6}$/.test(input)
 
         const log: PickupLog = {
           id: uuid(),
           batchId,
+          contextKey,
           inputCode: isCode ? input : null,
           inputPhone: !isCode ? input : null,
           isSuccess,
@@ -1865,8 +2148,31 @@ export const useAppStore = create<AppStore>()(
         ).length
       },
 
+      getFailedAttemptsByContext: (contextKey) => {
+        const FIVE_MIN_AGO = Date.now() - 5 * 60 * 1000
+        return get().pickupLogs.filter(
+          (l) => l.contextKey === contextKey && !l.isSuccess && l.attemptTime.getTime() >= FIVE_MIN_AGO
+        ).length
+      },
+
       isBatchLocked: (batchId) => {
         return get().lockRecords.some((l) => l.batchId === batchId && !l.isUnlocked)
+      },
+
+      isContextLocked: (contextKey) => {
+        const lock = get()
+          .lockRecords.filter((l) => l.contextKey === contextKey && !l.isUnlocked)
+          .sort((a, b) => b.lockedAt.getTime() - a.lockedAt.getTime())[0]
+        if (!lock) return false
+        if (!lock.autoUnlockAt) return true
+        return lock.autoUnlockAt.getTime() > Date.now()
+      },
+
+      getLockRecordByContext: (contextKey) => {
+        const lock = get()
+          .lockRecords.filter((l) => l.contextKey === contextKey && !l.isUnlocked)
+          .sort((a, b) => b.lockedAt.getTime() - a.lockedAt.getTime())[0]
+        return lock || null
       },
 
       applyFeeChange: (batchId, changeType, amount, reason, operator) => {
@@ -1898,6 +2204,7 @@ export const useAppStore = create<AppStore>()(
           reason,
           operator,
           operateTime: now,
+          createdAt: now,
         }
 
         set((state) => {
@@ -1944,6 +2251,7 @@ export const useAppStore = create<AppStore>()(
           reason: `冲正操作，原单号:${change.id}`,
           operator,
           operateTime: now,
+          createdAt: now,
         }
 
         set((state) => {
@@ -1974,12 +2282,18 @@ export const useAppStore = create<AppStore>()(
         if (!batch) {
           return {
             baseFee: 0,
+            baseAmount: 0,
             discountAmount: 0,
             packageDeduction: 0,
+            packageDiscount: 0,
+            memberDiscount: 0,
             overdueFee: 0,
+            reductionAmount: 0,
             compensationAmount: 0,
             adjustments: [],
+            totalAdjust: 0,
             totalPayable: 0,
+            finalAmount: 0,
             clothBreakdown: {},
           }
         }

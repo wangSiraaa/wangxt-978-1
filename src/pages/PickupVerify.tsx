@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calculator, CheckCircle, AlertTriangle, Inbox } from 'lucide-react';
+import { Calculator, CheckCircle, AlertTriangle, Inbox, Shield } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -9,28 +9,29 @@ import { PickupResultCard } from '../components/pickup/PickupResultCard';
 import { LockWarning } from '../components/pickup/LockWarning';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
-import type { Batch } from '../types';
+import type { Batch, LockRecord } from '../types';
 
 type SearchStatus = 'idle' | 'found' | 'not-found' | 'locked';
 
 export default function PickupVerify() {
   const navigate = useNavigate();
   const role = useAuthStore((s) => s.currentRole);
-  const verifyPickupCode = useAppStore((s) => s.verifyPickupCode);
-  const verifyByPhone = useAppStore((s) => s.verifyByPhone);
-  const getBatchById = useAppStore((s) => s.getBatchById);
-  const getFailedAttempts = useAppStore((s) => s.getFailedAttempts);
-  const isBatchLocked = useAppStore((s) => s.isBatchLocked);
-  const lockRecords = useAppStore((s) => s.lockRecords);
+  const verifyPickupInput = useAppStore((s) => s.verifyPickupInput);
   const getClothingByBatchId = useAppStore((s) => s.getClothingByBatchId);
+  const getFailedAttemptsByContext = useAppStore((s) => s.getFailedAttemptsByContext);
+  const isContextLocked = useAppStore((s) => s.isContextLocked);
+  const getLockRecordByContext = useAppStore((s) => s.getLockRecordByContext);
+  const unlockByContext = useAppStore((s) => s.unlockByContext);
   const initDemoData = useAppStore((s) => s.initDemoData);
 
   const [searchStatus, setSearchStatus] = React.useState<SearchStatus>('idle');
   const [foundBatches, setFoundBatches] = React.useState<Batch[]>([]);
   const [clothingMap, setClothingMap] = React.useState<Record<string, any[]>>({});
-  const [currentBatchId, setCurrentBatchId] = React.useState<string>('');
+  const [currentContext, setCurrentContext] = React.useState<string>('');
   const [failedAttempts, setFailedAttempts] = React.useState(0);
-  const [lockRecord, setLockRecord] = React.useState<any>(null);
+  const [lockRecord, setLockRecord] = React.useState<LockRecord | null>(null);
+  const [unlockReason, setUnlockReason] = React.useState('');
+  const [showUnlockForm, setShowUnlockForm] = React.useState(false);
 
   React.useEffect(() => {
     initDemoData();
@@ -63,58 +64,53 @@ export default function PickupVerify() {
   };
 
   const handleSearch = async (type: 'phone' | 'code', value: string) => {
-    if (type === 'code') {
-      const allBatches = useAppStore.getState().batches;
-      const batch = allBatches.find((b) => b.pickupCode === value);
-      
-      if (batch) {
-        setCurrentBatchId(batch.id);
-        const result = verifyPickupCode(batch.id, value);
-        
-        if (result.success) {
-          const clothing = getClothingByBatchId(batch.id);
-          setFoundBatches([batch]);
-          setClothingMap({ [batch.id]: clothing });
-          setSearchStatus('found');
-          setFailedAttempts(0);
-          setLockRecord(null);
-        } else {
-          setFoundBatches([]);
-          setClothingMap({});
-          setSearchStatus('not-found');
-          setFailedAttempts(getFailedAttempts(batch.id));
-          const batchLockRecords = lockRecords.filter((l) => l.batchId === batch.id && !l.isUnlocked);
-          setLockRecord(batchLockRecords.length > 0 ? batchLockRecords[0] : null);
-          if (result.isLocked) {
-            setSearchStatus('locked');
-          }
-        }
-      } else {
-        setFoundBatches([]);
-        setClothingMap({});
-        setSearchStatus('not-found');
-        setFailedAttempts((prev) => prev + 1);
-        setLockRecord(null);
-      }
-    } else {
-      const result = verifyByPhone(value);
-      if (result && result.length > 0) {
-        const map: Record<string, any[]> = {};
-        result.forEach((b) => {
-          map[b.id] = getClothingByBatchId(b.id);
-        });
-        setFoundBatches(result);
-        setClothingMap(map);
-        setCurrentBatchId(result[0].id);
-        setSearchStatus('found');
-        setFailedAttempts(0);
-        setLockRecord(null);
-      } else {
-        setFoundBatches([]);
-        setClothingMap({});
-        setSearchStatus('not-found');
-      }
+    const result = verifyPickupInput(type, value);
+    const contextKey = result.contextKey;
+    setCurrentContext(contextKey);
+
+    const contextLocked = isContextLocked(contextKey);
+    const contextLock = getLockRecordByContext(contextKey);
+
+    if (result.isLocked || contextLocked) {
+      setSearchStatus('locked');
+      setFailedAttempts(getFailedAttemptsByContext(contextKey));
+      setLockRecord(contextLock || getLockRecordByContext(contextKey));
+      setFoundBatches([]);
+      setClothingMap({});
+      return;
     }
+
+    if (result.success && result.matchedBatches.length > 0) {
+      const map: Record<string, any[]> = {};
+      result.matchedBatches.forEach((b) => {
+        map[b.id] = getClothingByBatchId(b.id);
+      });
+      setFoundBatches(result.matchedBatches);
+      setClothingMap(map);
+      setSearchStatus('found');
+      setFailedAttempts(0);
+      setLockRecord(null);
+    } else {
+      setFoundBatches([]);
+      setClothingMap({});
+      setSearchStatus('not-found');
+      setFailedAttempts(getFailedAttemptsByContext(contextKey));
+      setLockRecord(null);
+    }
+  };
+
+  const handleUnlock = () => {
+    if (!currentContext || !unlockReason.trim()) return;
+    const currentRole = useAuthStore.getState().currentRole || 'manager';
+    unlockByContext(currentContext, currentRole, unlockReason.trim());
+    const refreshed = getLockRecordByContext(currentContext);
+    setLockRecord(refreshed);
+    if (!refreshed) {
+      setSearchStatus('idle');
+      setFailedAttempts(0);
+    }
+    setShowUnlockForm(false);
+    setUnlockReason('');
   };
 
   const handlePickup = (batchId: string, clothingIds: string[]) => {
@@ -130,6 +126,7 @@ export default function PickupVerify() {
   };
 
   const showCashierActions = role === 'cashier' || role === 'manager' || role === 'staff';
+  const canUnlock = role === 'manager';
 
   return (
     <AppLayout
@@ -156,15 +153,47 @@ export default function PickupVerify() {
               </Button>
             </div>
           )}
+
+          {canUnlock && showUnlockForm && (
+            <div className="p-4 bg-white rounded-lg border border-gray-200 shadow-sm space-y-3">
+              <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                <Shield className="w-4 h-4 text-amber-500" />
+                解锁操作（审计留痕）
+              </h4>
+              <textarea
+                value={unlockReason}
+                onChange={(e) => setUnlockReason(e.target.value)}
+                placeholder="请填写解锁原因（必填，将记录在审计日志）"
+                className="w-full p-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-primary-400"
+                rows={3}
+              />
+              <div className="flex gap-2 justify-end">
+                <Button variant="outline" onClick={() => setShowUnlockForm(false)}>
+                  取消
+                </Button>
+                <Button onClick={handleUnlock} disabled={!unlockReason.trim()}>
+                  确认解锁
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="overflow-y-auto pr-2">
           {searchStatus === 'locked' || lockRecord ? (
-            <LockWarning
-              failedAttempts={failedAttempts}
-              maxAttempts={5}
-              lockRecord={lockRecord}
-            />
+            <div className="space-y-3">
+              <LockWarning
+                failedAttempts={failedAttempts}
+                maxAttempts={3}
+                lockRecord={lockRecord}
+              />
+              {canUnlock && !showUnlockForm && (
+                <Button variant="outline" onClick={() => setShowUnlockForm(true)} className="w-full">
+                  <Shield className="w-4 h-4 mr-1.5" />
+                  店长解锁（需填写原因）
+                </Button>
+              )}
+            </div>
           ) : searchStatus === 'idle' ? (
             <EmptyState
               icon={Inbox}
@@ -177,7 +206,7 @@ export default function PickupVerify() {
               title="未找到匹配的批次"
               description={
                 failedAttempts > 0
-                  ? `已失败 ${failedAttempts} 次，连续失败 5 次将锁定`
+                  ? `已失败 ${failedAttempts} 次，连续失败 3 次将锁定`
                   : '请检查取件码或手机号是否正确'
               }
               variant="warning"

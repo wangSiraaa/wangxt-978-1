@@ -79,5 +79,7 @@ export interface Batch {
   totalFee?: number
   isLocked: boolean
   isDayClosed: boolean
+  authorizedPickup?: boolean
+  isPickupCodeLocked?: boolean
   clothingItems?: ClothingItem[]
 }

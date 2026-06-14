@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, RotateCcw, Receipt, Lock, DollarSign, Inbox, RefreshCcw, Ban, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, RotateCcw, Receipt, Lock, DollarSign, Inbox, RefreshCcw, Ban, CheckCircle2, ShieldAlert, Unlock } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';
@@ -9,7 +9,9 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { RewashModal } from '../components/exceptions/RewashModal';
 import { CompensationModal } from '../components/exceptions/CompensationModal';
 import { LockAuditTable } from '../components/exceptions/LockAuditTable';
+import { Input } from '../components/ui/Input';
 import { useAppStore } from '../store/useAppStore';
+import { useAuthStore } from '../store/useAuthStore';
 import type { ClothingItem, Compensation as CompensationType, RewashRecord, LockRecord, FeeChange } from '../types';
 import { ClothingStatus, RewashStatus, CompensationStatus, LockType, FeeChangeType } from '../types';
 import { isRewashFailed } from '../utils/statusCalc';
@@ -49,6 +51,7 @@ export default function ExceptionHandle() {
   const feeChanges = useAppStore((s) => s.feeChanges);
   const lockBatch = useAppStore((s) => s.lockBatch);
   const unlockBatch = useAppStore((s) => s.unlockBatch);
+  const unlockByContext = useAppStore((s) => s.unlockByContext);
   const completeRewash = useAppStore((s) => s.completeRewash);
   const markRewashFailed = useAppStore((s) => s.markRewashFailed);
 
@@ -59,6 +62,8 @@ export default function ExceptionHandle() {
   const [currentCompensation, setCurrentCompensation] = React.useState<CompensationType | null>(null);
   const [compensationMode, setCompensationMode] = React.useState<'apply' | 'approve'>('apply');
   const [selectedLockBatchId, setSelectedLockBatchId] = React.useState('');
+  const [unlockingRecord, setUnlockingRecord] = React.useState<LockRecord | null>(null);
+  const [unlockReason, setUnlockReason] = React.useState('');
 
   const clothingByBatchId = React.useMemo(() => {
     const map: Record<string, ClothingItem[]> = {};
@@ -170,7 +175,22 @@ export default function ExceptionHandle() {
   };
 
   const handleUnlock = async (record: LockRecord) => {
-    unlockBatch(record.batchId, 'manager', '管理员解锁');
+    if (record.isUnlocked) return;
+    setUnlockingRecord(record);
+    setUnlockReason('');
+  };
+
+  const handleConfirmUnlock = () => {
+    if (!unlockingRecord || !unlockReason.trim()) return;
+    const role = useAuthStore.getState().currentRole || 'manager';
+    unlockByContext(unlockingRecord.contextKey, role, unlockReason.trim());
+    setUnlockingRecord(null);
+    setUnlockReason('');
+  };
+
+  const handleCancelUnlock = () => {
+    setUnlockingRecord(null);
+    setUnlockReason('');
   };
 
   return (
@@ -383,6 +403,52 @@ export default function ExceptionHandle() {
                 </Button>
               </div>
             </div>
+
+            {unlockingRecord && (
+              <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                <div className="bg-white rounded-lg shadow-xl w-[440px] p-5 space-y-4">
+                  <div className="flex items-center gap-2 text-lg font-semibold text-slate-800">
+                    <ShieldAlert className="w-5 h-5 text-amber-500" />
+                    解锁确认
+                  </div>
+                  <div className="text-sm text-slate-600 space-y-1.5">
+                    <p>
+                      <span className="text-slate-500">锁定对象：</span>
+                      <span className="font-mono">
+                        {unlockingRecord.batchId
+                          ? (batchNoMap[unlockingRecord.batchId] || unlockingRecord.batchId)
+                          : `[${unlockingRecord.contextKey}]`}
+                      </span>
+                    </p>
+                    <p>
+                      <span className="text-slate-500">锁定原因：</span>
+                      {unlockingRecord.reason}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      <span className="text-red-500">*</span> 解锁原因（必填，将记录在审计日志）
+                    </label>
+                    <textarea
+                      value={unlockReason}
+                      onChange={(e) => setUnlockReason(e.target.value)}
+                      placeholder="请填写解锁原因，如：顾客身份已核实、系统自动锁定超时解除等"
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-primary-400"
+                      rows={3}
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button variant="outline" onClick={handleCancelUnlock}>
+                      取消
+                    </Button>
+                    <Button onClick={handleConfirmUnlock} disabled={!unlockReason.trim()}>
+                      <Unlock className="w-4 h-4 mr-1.5" />
+                      确认解锁
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

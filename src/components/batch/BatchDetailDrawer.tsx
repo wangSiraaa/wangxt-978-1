@@ -440,14 +440,14 @@ const ClothingCard: React.FC<ClothingCardProps> = ({ cloth, qcRecords, compensat
   const isRewashFailedStatus = isRewashFailed(cloth);
 
   const getRiskBadge = () => {
-    if (statusRisk === 'high') {
+    if (statusRisk === 'danger') {
       return (
         <Badge className="text-[10px] px-1.5 py-0 flex items-center gap-0.5 bg-red-100 text-red-700 border-red-200">
           <AlertTriangle className="w-3 h-3" /> 高风险
         </Badge>
       );
     }
-    if (statusRisk === 'medium') {
+    if (statusRisk === 'warning') {
       return (
         <Badge className="text-[10px] px-1.5 py-0 flex items-center gap-0.5 bg-orange-100 text-orange-700 border-orange-200">
           <AlertTriangle className="w-3 h-3" /> 中风险

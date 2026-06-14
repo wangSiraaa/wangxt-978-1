@@ -119,10 +119,12 @@ export enum RewashStatus {
 }
 
 export interface ClothingStatusTransition {
+  clothingId?: string
   fromStatus: ClothingStatus
   toStatus: ClothingStatus
   operator: string
   reason?: string
+  remark?: string
   timestamp: Date
 }
 
@@ -191,4 +193,56 @@ export interface FeeChange {
   reason: string
   operator: string
   operateTime: Date
+  createdAt: Date
+}
+
+export interface QcRecord {
+  id: string
+  batchId: string
+  clothingId: string
+  result: QcResult
+  description: string | null
+  photos: string[]
+  inspector: string
+  inspectTime: Date
+  suggestion: string | null
+}
+
+export interface RewashRecord {
+  id: string
+  batchId: string
+  clothingId: string
+  reason: string
+  operator: string
+  newBatchId: string | null
+  createdAt: Date
+  status: RewashStatus
+}
+
+export interface Compensation {
+  id: string
+  batchId: string
+  clothingId: string
+  applyAmount: number
+  approveAmount: number
+  amount: number
+  reason: string
+  applicant: string
+  approver: string | null
+  createdBy: string
+  status: CompensationStatus
+  applyTime: Date
+  approveTime: Date | null
+  createdAt: Date
+}
+
+export interface Transfer {
+  id: string
+  fromStoreId: string
+  toStoreId: string
+  clothingIds: string[]
+  operator: string
+  status: TransferStatus
+  createdAt: Date
+  receivedAt: Date | null
 }

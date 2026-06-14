@@ -24,12 +24,18 @@ export interface FeeAdjustmentLog {
 
 export interface FeeBreakdown {
   baseFee: number
+  baseAmount: number
   discountAmount: number
   packageDeduction: number
+  packageDiscount: number
+  memberDiscount: number
   overdueFee: number
+  reductionAmount: number
   compensationAmount: number
   adjustments: FeeChange[]
+  totalAdjust: number
   totalPayable: number
+  finalAmount: number
   clothBreakdown: Record<string, {
     basePrice: number
     discount: number
@@ -184,12 +190,18 @@ export function calcBatchFee(
 
   return {
     baseFee,
+    baseAmount: baseFee,
     discountAmount,
     packageDeduction,
+    packageDiscount: packageDeduction,
+    memberDiscount: discountAmount,
     overdueFee,
+    reductionAmount: 0,
     compensationAmount: totalCompensation,
     adjustments: batchFeeChanges,
+    totalAdjust: adjustmentTotal,
     totalPayable,
+    finalAmount: totalPayable,
     clothBreakdown,
   }
 }
@@ -251,12 +263,18 @@ export function calcPartialPickupFee(
 
   return {
     baseFee: Math.round(pickupBaseFee * 100) / 100,
+    baseAmount: Math.round(pickupBaseFee * 100) / 100,
     discountAmount: Math.round(pickupDiscount * 100) / 100,
     packageDeduction: pickupPackageDeduction,
+    packageDiscount: pickupPackageDeduction,
+    memberDiscount: Math.round(pickupDiscount * 100) / 100,
     overdueFee: Math.round(pickupOverdue * 100) / 100,
+    reductionAmount: 0,
     compensationAmount: pickupCompensation,
     adjustments: relatedAdjustments,
+    totalAdjust: pickupAdjustmentTotal,
     totalPayable,
+    finalAmount: totalPayable,
     clothBreakdown,
   }
 }
@@ -318,6 +336,7 @@ export function previewFee(params: {
       basePrice: clothBase[key].basePrice,
       discount: clothBase[key].discount,
       overdueShare: overdueShare[key] || 0,
+      compensationShare: 0,
       final: Math.round((clothBase[key].final + (overdueShare[key] || 0)) * 100) / 100,
     }
   })
@@ -326,11 +345,18 @@ export function previewFee(params: {
 
   return {
     baseFee,
+    baseAmount: baseFee,
     discountAmount,
     packageDeduction: Math.round(actualPackageDeduction * 100) / 100,
+    packageDiscount: Math.round(actualPackageDeduction * 100) / 100,
+    memberDiscount: discountAmount,
     overdueFee,
+    reductionAmount: 0,
+    compensationAmount: 0,
     adjustments: [],
+    totalAdjust: 0,
     totalPayable: Math.max(0, subTotal),
+    finalAmount: Math.max(0, subTotal),
     clothBreakdown,
   }
 }

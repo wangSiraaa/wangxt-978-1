@@ -7,6 +7,7 @@ export type ButtonVariant =
   | "accent"
   | "success"
   | "danger"
+  | "warning"
   | "outline"
   | "ghost"
   | "link";
@@ -29,6 +30,8 @@ const variantStyles: Record<ButtonVariant, string> = {
     "bg-success-500 text-white hover:bg-success-600 active:bg-success-700 shadow-sm",
   danger:
     "bg-danger-500 text-white hover:bg-danger-600 active:bg-danger-700 shadow-sm",
+  warning:
+    "bg-amber-500 text-white hover:bg-amber-600 active:bg-amber-700 shadow-sm",
   outline:
     "bg-transparent text-primary-500 border border-primary-300 hover:bg-primary-50 active:bg-primary-100",
   ghost:

@@ -75,7 +75,8 @@ export const LockAuditTable: React.FC<LockAuditTableProps> = ({
       if (keyword.trim()) {
         const k = keyword.trim().toLowerCase();
         const text = [
-          batchNoMap[r.batchId],
+          r.batchId ? batchNoMap[r.batchId] : '',
+          r.contextKey,
           r.reason,
           r.lockedBy,
           r.unlockedBy,
@@ -180,7 +181,7 @@ export const LockAuditTable: React.FC<LockAuditTableProps> = ({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-sm font-medium text-slate-800">
-                        {batchNoMap[r.batchId] || r.batchId}
+                        {r.batchId ? (batchNoMap[r.batchId] || r.batchId) : `[${r.contextKey}]`}
                       </span>
                       <Badge variant={getLockBadgeVariant(r.lockType as LockType)}>
                         {getLockTypeLabel(r.lockType as LockType)}
